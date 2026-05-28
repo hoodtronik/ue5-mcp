@@ -225,12 +225,17 @@ namespace
 	}
 
 	/** Create a renderer-properties object of the requested class on the emitter. */
+	// CLAUDE-NOTE: must pass NAME_None — the factory emitter already owns a subobject
+	// literally named "Renderer" (its default sprite renderer). Reusing that name with a
+	// different class is a FATAL UObject collision ("Cannot replace existing object of a
+	// different class"). NAME_None auto-generates a unique name; RF_Transactional matches
+	// how NiagaraEditor's own AddRenderer creates renderer properties (undo support).
 	UNiagaraRendererProperties* NewRendererByType(const FString& RendererType, UNiagaraEmitter* Owner)
 	{
-		if (RendererType.Equals(TEXT("Sprite"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraSpriteRendererProperties>(Owner, "Renderer");
-		if (RendererType.Equals(TEXT("Mesh"), ESearchCase::IgnoreCase))    return NewObject<UNiagaraMeshRendererProperties>(Owner, "Renderer");
-		if (RendererType.Equals(TEXT("Ribbon"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraRibbonRendererProperties>(Owner, "Renderer");
-		if (RendererType.Equals(TEXT("Light"), ESearchCase::IgnoreCase))   return NewObject<UNiagaraLightRendererProperties>(Owner, "Renderer");
+		if (RendererType.Equals(TEXT("Sprite"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraSpriteRendererProperties>(Owner, NAME_None, RF_Transactional);
+		if (RendererType.Equals(TEXT("Mesh"), ESearchCase::IgnoreCase))    return NewObject<UNiagaraMeshRendererProperties>(Owner, NAME_None, RF_Transactional);
+		if (RendererType.Equals(TEXT("Ribbon"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraRibbonRendererProperties>(Owner, NAME_None, RF_Transactional);
+		if (RendererType.Equals(TEXT("Light"), ESearchCase::IgnoreCase))   return NewObject<UNiagaraLightRendererProperties>(Owner, NAME_None, RF_Transactional);
 		return nullptr;
 	}
 }
