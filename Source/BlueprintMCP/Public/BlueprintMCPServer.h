@@ -294,6 +294,7 @@ private:
 	FString HandleRemoveNiagaraRenderer(const FString& Body);
 	FString HandleRemoveUserParameter(const FString& Body);
 	FString HandleRemoveEmitterFromSystem(const FString& Body);
+	FString HandleListEmitterModules(const FString& Body);
 
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);

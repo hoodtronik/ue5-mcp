@@ -186,6 +186,33 @@ export function registerNiagaraTools(server: McpServer): void {
     }
   );
 
+  server.tool(
+    "list_emitter_modules",
+    "List the stack modules on an emitter, grouped by stage and in execution order, with each module's node GUID. Use the returned GUID with set_module_input to edit an EXISTING module's inputs (not just ones you just added).",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      stage: z.enum(["EmitterSpawn", "EmitterUpdate", "ParticleSpawn", "ParticleUpdate"]).optional().describe("Only modules on this stage (default: all stages)"),
+    },
+    async ({ emitter, stage }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const body: Record<string, any> = { emitter };
+      if (stage) body.stage = stage;
+
+      const data = await uePost("/api/list-emitter-modules", body);
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`${data.count} module(s) on ${data.emitter || emitter}${data.stageFilter ? ` (stage: ${data.stageFilter})` : ""}`);
+      for (const m of data.modules || []) {
+        const flag = m.enabled === false ? " [disabled]" : "";
+        lines.push(`  [${m.stage} #${m.order}] ${m.name}${flag}  guid=${m.nodeGuid}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // Stack authoring (Tier 2)
   // ---------------------------------------------------------------------------

@@ -685,6 +685,50 @@ namespace
 		}
 		return nullptr;
 	}
+
+	// CLAUDE-NOTE: header-only reimplementation of the non-exported
+	// FNiagaraStackGraphUtilities::GetParameterMapInputPin — the input pin whose Niagara
+	// type is the ParameterMap def. PinToTypeDefinition is exported; we iterate Node->Pins
+	// directly (public UEdGraphNode member) instead of the non-exported GetInputPins.
+	UEdGraphPin* FindParameterMapInputPin(UNiagaraNode* Node)
+	{
+		if (!Node) { return nullptr; }
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin && Pin->Direction == EGPD_Input &&
+				UEdGraphSchema_Niagara::PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+			{
+				return Pin;
+			}
+		}
+		return nullptr;
+	}
+
+	// CLAUDE-NOTE: header-only reimplementation of the non-exported
+	// FNiagaraStackGraphUtilities::GetOrderedModuleNodes. Walks the parameter-map chain
+	// backward from a stage's output node; each UNiagaraNodeFunctionCall in the chain is a
+	// stack module, collected in execution order (insert-at-front while walking back).
+	void GetOrderedStageModules(UNiagaraNodeOutput* OutputNode, TArray<UNiagaraNodeFunctionCall*>& OutModules)
+	{
+		UNiagaraNode* PreviousNode = OutputNode;
+		while (PreviousNode != nullptr)
+		{
+			UEdGraphPin* InputPin = FindParameterMapInputPin(PreviousNode);
+			if (InputPin != nullptr && InputPin->LinkedTo.Num() == 1)
+			{
+				UNiagaraNode* CurrentNode = Cast<UNiagaraNode>(InputPin->LinkedTo[0]->GetOwningNode());
+				if (UNiagaraNodeFunctionCall* ModuleNode = Cast<UNiagaraNodeFunctionCall>(CurrentNode))
+				{
+					OutModules.Insert(ModuleNode, 0);
+				}
+				PreviousNode = CurrentNode;
+			}
+			else
+			{
+				PreviousNode = nullptr;
+			}
+		}
+	}
 }
 
 // ============================================================
@@ -1375,5 +1419,96 @@ FString FBlueprintMCPServer::HandleRemoveEmitterFromSystem(const FString& Body)
 	Result->SetStringField(TEXT("removedHandle"), HandleName);
 	Result->SetNumberField(TEXT("emitterCount"), System->GetEmitterHandles().Num());
 	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleListEmitterModules — list stack modules per stage on an emitter
+// ============================================================
+
+FString FBlueprintMCPServer::HandleListEmitterModules(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+
+	// Optional stage filter; if absent, report all four stages.
+	FString StageFilter;
+	bool bHasStageFilter = Json->TryGetStringField(TEXT("stage"), StageFilter) && !StageFilter.IsEmpty();
+	ENiagaraScriptUsage FilterUsage = ENiagaraScriptUsage::ParticleSpawnScript;
+	if (bHasStageFilter && !StageToScriptUsage(StageFilter, FilterUsage))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Unknown stage '%s'"), *StageFilter));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	UNiagaraGraph* Graph = GetEmitterGraph(Data);
+	if (!Graph)
+	{
+		return MakeErrorJson(TEXT("Could not resolve emitter node graph"));
+	}
+
+	// CLAUDE-NOTE: stage label <-> usage pairs in stack order. The module GUIDs returned
+	// here are what set_module_input / remove-module style tools target on EXISTING modules
+	// (you no longer need to have just added the module to know its GUID).
+	struct FStageDef { const TCHAR* Label; ENiagaraScriptUsage Usage; };
+	static const FStageDef Stages[] = {
+		{ TEXT("EmitterSpawn"),   ENiagaraScriptUsage::EmitterSpawnScript },
+		{ TEXT("EmitterUpdate"),  ENiagaraScriptUsage::EmitterUpdateScript },
+		{ TEXT("ParticleSpawn"),  ENiagaraScriptUsage::ParticleSpawnScript },
+		{ TEXT("ParticleUpdate"), ENiagaraScriptUsage::ParticleUpdateScript },
+	};
+
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FStageDef& StageDef : Stages)
+	{
+		if (bHasStageFilter && !UNiagaraScript::IsEquivalentUsage(StageDef.Usage, FilterUsage))
+		{
+			continue;
+		}
+
+		UNiagaraNodeOutput* OutputNode = FindStageOutputNode(Graph, StageDef.Usage);
+		if (!OutputNode) { continue; }
+
+		TArray<UNiagaraNodeFunctionCall*> Modules;
+		GetOrderedStageModules(OutputNode, Modules);
+
+		int32 OrderIndex = 0;
+		for (UNiagaraNodeFunctionCall* Module : Modules)
+		{
+			if (!Module) { continue; }
+			TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+			Item->SetStringField(TEXT("stage"), StageDef.Label);
+			Item->SetNumberField(TEXT("order"), OrderIndex++);
+			Item->SetStringField(TEXT("name"), Module->GetFunctionName());
+			Item->SetStringField(TEXT("nodeGuid"), Module->NodeGuid.ToString());
+			if (Module->FunctionScript)
+			{
+				Item->SetStringField(TEXT("scriptPath"), Module->FunctionScript->GetPathName());
+			}
+			Item->SetBoolField(TEXT("enabled"), Module->IsNodeEnabled());
+			Items.Add(MakeShared<FJsonValueObject>(Item));
+		}
+	}
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetNumberField(TEXT("count"), Items.Num());
+	Result->SetArrayField(TEXT("modules"), Items);
+	if (bHasStageFilter) { Result->SetStringField(TEXT("stageFilter"), StageFilter); }
 	return JsonToString(Result);
 }

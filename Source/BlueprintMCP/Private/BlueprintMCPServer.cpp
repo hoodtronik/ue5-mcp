@@ -976,6 +976,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("removeUserParameter")));
 	Router->BindRoute(FHttpPath(TEXT("/api/remove-emitter-from-system")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("removeEmitterFromSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-emitter-modules")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listEmitterModules")));
 
 	// Register TMap dispatch handlers
 	RegisterHandlers();
@@ -1391,6 +1393,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("removeNiagaraRenderer"),      [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveNiagaraRenderer(B); });
 	HandlerMap.Add(TEXT("removeUserParameter"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveUserParameter(B); });
 	HandlerMap.Add(TEXT("removeEmitterFromSystem"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveEmitterFromSystem(B); });
+	HandlerMap.Add(TEXT("listEmitterModules"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleListEmitterModules(B); });
 
 	// Level actor handlers
 	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
