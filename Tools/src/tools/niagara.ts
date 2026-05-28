@@ -213,6 +213,30 @@ export function registerNiagaraTools(server: McpServer): void {
     }
   );
 
+  server.tool(
+    "list_module_inputs",
+    "List a module's top-level inputs (name + Niagara type) so you can call set_module_input safely. 'input' is the name to pass to set_module_input; 'type' is the matching enum value ('' / settable:false means set_module_input can't write that type yet). Get the module's nodeGuid from list_emitter_modules.",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      moduleNodeGuid: z.string().describe("Module node GUID from list_emitter_modules or add_niagara_module"),
+    },
+    async ({ emitter, moduleNodeGuid }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/list-module-inputs", { emitter, moduleNodeGuid });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`${data.count} input(s) on module '${data.moduleName}' (${data.emitter || emitter})`);
+      for (const i of data.inputs || []) {
+        const settable = i.settable ? i.type : `${i.niagaraType} [not settable via set_module_input]`;
+        lines.push(`  ${i.input}  : ${settable}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // Stack authoring (Tier 2)
   // ---------------------------------------------------------------------------

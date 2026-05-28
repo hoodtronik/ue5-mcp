@@ -33,6 +33,7 @@
 #include "EdGraphSchema_Niagara.h"
 #include "NiagaraParameterStore.h"
 #include "NiagaraUserRedirectionParameterStore.h"
+#include "NiagaraParameterMapHistory.h"
 
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
@@ -728,6 +729,21 @@ namespace
 				PreviousNode = nullptr;
 			}
 		}
+	}
+
+	// CLAUDE-NOTE: reverse of ResolveNiagaraType — map a Niagara type to the string the
+	// set_module_input 'type' enum accepts. Returns empty for types set_module_input can't
+	// write yet, so list_module_inputs can flag which inputs are settable.
+	FString NiagaraTypeToInputTypeString(const FNiagaraTypeDefinition& T)
+	{
+		if (T == FNiagaraTypeDefinition::GetFloatDef()) { return TEXT("float"); }
+		if (T == FNiagaraTypeDefinition::GetIntDef())   { return TEXT("int"); }
+		if (T == FNiagaraTypeDefinition::GetBoolDef())  { return TEXT("bool"); }
+		if (T == FNiagaraTypeDefinition::GetVec2Def())  { return TEXT("vec2"); }
+		if (T == FNiagaraTypeDefinition::GetVec3Def())  { return TEXT("vec3"); }
+		if (T == FNiagaraTypeDefinition::GetVec4Def())  { return TEXT("vec4"); }
+		if (T == FNiagaraTypeDefinition::GetColorDef()) { return TEXT("color"); }
+		return FString();
 	}
 }
 
@@ -1510,5 +1526,92 @@ FString FBlueprintMCPServer::HandleListEmitterModules(const FString& Body)
 	Result->SetNumberField(TEXT("count"), Items.Num());
 	Result->SetArrayField(TEXT("modules"), Items);
 	if (bHasStageFilter) { Result->SetStringField(TEXT("stageFilter"), StageFilter); }
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleListModuleInputs — list a module's input names + types
+// ============================================================
+
+FString FBlueprintMCPServer::HandleListModuleInputs(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, ModuleGuidStr;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	if (!Json->TryGetStringField(TEXT("moduleNodeGuid"), ModuleGuidStr) || ModuleGuidStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: moduleNodeGuid (from list_emitter_modules)"));
+	}
+
+	FGuid ModuleGuid;
+	if (!FGuid::Parse(ModuleGuidStr, ModuleGuid))
+	{
+		return MakeErrorJson(TEXT("moduleNodeGuid is not a valid GUID"));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	UNiagaraGraph* Graph = GetEmitterGraph(Data);
+	if (!Graph)
+	{
+		return MakeErrorJson(TEXT("Could not resolve emitter node graph"));
+	}
+
+	UNiagaraNodeFunctionCall* ModuleNode = FindModuleNodeByGuid(Graph, ModuleGuid);
+	if (!ModuleNode)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("No module node with GUID '%s' in this emitter"), *ModuleGuidStr));
+	}
+
+	// CLAUDE-NOTE: a default-constructed FCompileConstantResolver is what the engine's own
+	// input binder uses outside a full compile context — sufficient to enumerate a module's
+	// top-level inputs. ModuleInputsOnly excludes nested dynamic-input sub-function inputs.
+	TArray<FNiagaraVariable> InputVars;
+	FCompileConstantResolver Resolver;
+	FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+		*ModuleNode, InputVars, Resolver,
+		FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly,
+		/*bIgnoreDisabled*/ false);
+
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FNiagaraVariable& Var : InputVars)
+	{
+		const FString FullName = Var.GetName().ToString();
+		// set_module_input expects the bare input name (it re-aliases to Module.<name>).
+		FString InputName = FullName;
+		if (InputName.StartsWith(TEXT("Module.")))
+		{
+			InputName = InputName.RightChop(7);
+		}
+		const FString TypeStr = NiagaraTypeToInputTypeString(Var.GetType());
+
+		TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+		Item->SetStringField(TEXT("input"), InputName);
+		Item->SetStringField(TEXT("fullName"), FullName);
+		Item->SetStringField(TEXT("niagaraType"), Var.GetType().GetName());
+		Item->SetStringField(TEXT("type"), TypeStr);                 // "" if set_module_input can't write it
+		Item->SetBoolField(TEXT("settable"), !TypeStr.IsEmpty());
+		Items.Add(MakeShared<FJsonValueObject>(Item));
+	}
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("moduleName"), ModuleNode->GetFunctionName());
+	Result->SetStringField(TEXT("moduleNodeGuid"), ModuleGuidStr);
+	Result->SetNumberField(TEXT("count"), Items.Num());
+	Result->SetArrayField(TEXT("inputs"), Items);
 	return JsonToString(Result);
 }

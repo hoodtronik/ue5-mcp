@@ -295,6 +295,7 @@ private:
 	FString HandleRemoveUserParameter(const FString& Body);
 	FString HandleRemoveEmitterFromSystem(const FString& Body);
 	FString HandleListEmitterModules(const FString& Body);
+	FString HandleListModuleInputs(const FString& Body);
 
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);
