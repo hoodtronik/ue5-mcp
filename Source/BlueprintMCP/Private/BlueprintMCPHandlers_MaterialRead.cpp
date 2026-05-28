@@ -931,8 +931,11 @@ FString FBlueprintMCPServer::HandleValidateMaterial(const FString& Body)
 	TArray<TSharedPtr<FJsonValue>> ErrorArray;
 	bool bValid = true;
 
-	// Check for compilation errors via FMaterialResource on current platform
-	FMaterialResource* Resource = Material->GetMaterialResource(GMaxRHIShaderPlatform);
+	// Check for compilation errors via FMaterialResource on current platform.
+	// CLAUDE-NOTE: UE 5.6 changed UMaterial::GetMaterialResource signature from
+	// (EShaderPlatform) to (ERHIFeatureLevel::Type [, EMaterialQualityLevel::Type=Num]).
+	// Use GMaxRHIFeatureLevel global instead of GMaxRHIShaderPlatform.
+	FMaterialResource* Resource = Material->GetMaterialResource(GMaxRHIFeatureLevel);
 	if (Resource)
 	{
 		const TArray<FString>& CompileErrors = Resource->GetCompileErrors();
