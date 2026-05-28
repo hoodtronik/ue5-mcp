@@ -39,24 +39,27 @@ export function registerNiagaraTools(server: McpServer): void {
 
   server.tool(
     "create_niagara_emitter",
-    "Create an empty UNiagaraEmitter asset. Standalone emitters can be attached to one or more systems via add_emitter_to_system.",
+    "Create a UNiagaraEmitter asset. By DEFAULT the factory seeds a full working emitter (EmitterState, SpawnRate, sprite size/lifetime, color + a Sprite renderer) — it already emits. Pass bare=true for a truly empty emitter to build up from scratch with the stack-authoring tools. Standalone emitters attach to systems via add_emitter_to_system.",
     {
       name: z.string().describe("Emitter asset name (convention: 'NE_MyEmitter')"),
       packagePath: z.string().default("/Game/Niagara").describe("Package path (e.g. '/Game/Exhibit/Niagara')"),
       simTarget: z.enum(["CPU", "GPU"]).optional().describe("Simulation target: CPU (default) or GPU compute"),
+      bare: z.boolean().optional().describe("If true, create an EMPTY emitter (no default modules/renderers) to author entirely via add_niagara_module / add_niagara_renderer. Default false = full factory emitter that already emits."),
     },
-    async ({ name, packagePath, simTarget }) => {
+    async ({ name, packagePath, simTarget, bare }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
       const body: Record<string, any> = { name, packagePath };
       if (simTarget) body.simTarget = simTarget;
+      if (bare !== undefined) body.bare = bare;
 
       const data = await uePost("/api/create-niagara-emitter", body);
       if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
 
       const lines: string[] = [];
       lines.push(`Created NiagaraEmitter ${data.name || name} at ${data.assetPath || `${packagePath}/${name}`}`);
+      if (data.bare !== undefined) lines.push(`Bare (empty): ${data.bare}`);
       if (data.simTarget) lines.push(`Sim target: ${data.simTarget}`);
       if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -267,8 +270,8 @@ export function registerNiagaraTools(server: McpServer): void {
       stage: z.enum(STAGES).describe("Stack stage the module lives on"),
       moduleNodeGuid: z.string().describe("Module node GUID returned by add_niagara_module"),
       input: z.string().describe("Module input name, e.g. 'SpawnRate'"),
-      type: z.enum(["float", "int", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
-      value: valueSchema.describe("Value: number for scalars, [x,y,...] array for vectors/color"),
+      type: z.enum(["float", "int", "bool", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
+      value: valueSchema.describe("Value: number for scalars, boolean for bool, [x,y,...] array for vectors/color"),
     },
     async ({ emitter, stage, moduleNodeGuid, input, type, value }) => {
       const err = await ensureUE();
@@ -348,6 +351,75 @@ export function registerNiagaraTools(server: McpServer): void {
       for (const m of data.modules || []) {
         lines.push(`  ${m.name}  (${m.path})`);
       }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Removal (Tier 2 CRUD counterparts)
+  // ---------------------------------------------------------------------------
+
+  server.tool(
+    "remove_niagara_renderer",
+    "Remove a renderer from a UNiagaraEmitter by its index (as listed by get_niagara_emitter_summary).",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      index: z.number().int().describe("Renderer index (0-based) from get_niagara_emitter_summary"),
+    },
+    async ({ emitter, index }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/remove-niagara-renderer", { emitter, index });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Removed ${data.removedClass} from ${data.emitter || emitter}`);
+      if (data.rendererCount !== undefined) lines.push(`Emitter now has ${data.rendererCount} renderer(s)`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "remove_user_parameter",
+    "Remove a User Parameter from a UNiagaraSystem. Name is auto-prefixed with 'User.' if omitted.",
+    {
+      system: z.string().describe("System name or /Game/... path"),
+      name: z.string().describe("Parameter name (User. prefix added automatically)"),
+    },
+    async ({ system, name }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/remove-user-parameter", { system, name });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Removed user parameter ${data.name} from ${data.system || system} (removed: ${data.removed})`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "remove_emitter_from_system",
+    "Detach an emitter handle from a UNiagaraSystem by its handle name (as listed by get_niagara_system_summary). Triggers a system recompile.",
+    {
+      system: z.string().describe("System name or /Game/... path"),
+      handleName: z.string().describe("Emitter handle name inside the system (from get_niagara_system_summary)"),
+    },
+    async ({ system, handleName }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/remove-emitter-from-system", { system, handleName });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Removed emitter handle '${data.removedHandle || handleName}' from ${data.system || system}`);
+      if (data.emitterCount !== undefined) lines.push(`System now has ${data.emitterCount} emitter(s)`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );

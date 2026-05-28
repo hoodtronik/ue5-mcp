@@ -291,6 +291,9 @@ private:
 	FString HandleSetUserParameterDefault(const FString& Body);
 	FString HandleListModuleLibrary(const TMap<FString, FString>& Params);
 	FString HandleSetEmitterSimTarget(const FString& Body);
+	FString HandleRemoveNiagaraRenderer(const FString& Body);
+	FString HandleRemoveUserParameter(const FString& Body);
+	FString HandleRemoveEmitterFromSystem(const FString& Body);
 
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);

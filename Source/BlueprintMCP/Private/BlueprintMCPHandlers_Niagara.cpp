@@ -1047,16 +1047,14 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 		return MakeErrorJson(TEXT("Missing required field: type (float|int|vec2|vec3|vec4|color)"));
 	}
 
-	// CLAUDE-NOTE: bool/enum are NOT rapid-iteration types and take a different graph
-	// path; only the inline-literal types are supported via the override-pin default here.
+	// CLAUDE-NOTE: every supported type (incl. bool) is written via the override-pin
+	// default-value path below — the same branch UNiagaraStackFunctionInput::SetLocalValue
+	// uses for non-rapid-iteration inputs. bool serializes fine through
+	// TryGetPinDefaultValueFromNiagaraVariable, so no type is excluded here.
 	FNiagaraTypeDefinition InputType;
 	if (!ResolveNiagaraType(TypeStr, InputType))
 	{
 		return MakeErrorJson(FString::Printf(TEXT("Unsupported type '%s'"), *TypeStr));
-	}
-	if (InputType == FNiagaraTypeDefinition::GetBoolDef())
-	{
-		return MakeErrorJson(TEXT("bool inputs are not yet supported by set_module_input"));
 	}
 
 	FGuid ModuleGuid;
@@ -1197,5 +1195,185 @@ FString FBlueprintMCPServer::HandleListModuleLibrary(const TMap<FString, FString
 	Result->SetNumberField(TEXT("count"), Items.Num());
 	Result->SetArrayField(TEXT("modules"), Items);
 	if (bHasStageFilter) { Result->SetStringField(TEXT("stageFilter"), *Params.Find(TEXT("stage"))); }
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleRemoveNiagaraRenderer — remove a renderer by index
+// ============================================================
+
+FString FBlueprintMCPServer::HandleRemoveNiagaraRenderer(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	int32 Index = 0;
+	if (!Json->TryGetNumberField(TEXT("index"), Index))
+	{
+		return MakeErrorJson(TEXT("Missing required field: index (renderer index from get_niagara_emitter_summary)"));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	if (!Data)
+	{
+		return MakeErrorJson(TEXT("Emitter has no latest version data"));
+	}
+
+	const TArray<UNiagaraRendererProperties*>& Renderers = Data->GetRenderers();
+	if (!Renderers.IsValidIndex(Index))
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Renderer index %d out of range (emitter has %d renderer(s))"), Index, Renderers.Num()));
+	}
+
+	UNiagaraRendererProperties* Renderer = Renderers[Index];
+	const FString RemovedClass = Renderer ? Renderer->GetClass()->GetName() : TEXT("<null>");
+
+	Emitter->Modify();
+	Emitter->RemoveRenderer(Renderer, Emitter->GetExposedVersion().VersionGuid);
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("removedClass"), RemovedClass);
+	Result->SetNumberField(TEXT("rendererCount"), Data->GetRenderers().Num());
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleRemoveUserParameter — remove a User Parameter from a system
+// ============================================================
+
+FString FBlueprintMCPServer::HandleRemoveUserParameter(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString SystemNameOrPath, ParamName;
+	if (!Json->TryGetStringField(TEXT("system"), SystemNameOrPath) || SystemNameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: system"));
+	}
+	if (!Json->TryGetStringField(TEXT("name"), ParamName) || ParamName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: name"));
+	}
+
+	UNiagaraSystem* System = FindNiagaraSystemByNameOrPath(SystemNameOrPath);
+	if (!System)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraSystem '%s' not found"), *SystemNameOrPath));
+	}
+
+	const FString FullName = ParamName.StartsWith(TEXT("User.")) ? ParamName : (TEXT("User.") + ParamName);
+
+	FNiagaraUserRedirectionParameterStore& Store = System->GetExposedParameters();
+	TArray<FNiagaraVariable> Existing;
+	Store.GetParameters(Existing);
+
+	FNiagaraVariable Target;
+	for (const FNiagaraVariable& Var : Existing)
+	{
+		if (Var.GetName().ToString().Equals(FullName, ESearchCase::IgnoreCase))
+		{
+			Target = Var;
+			break;
+		}
+	}
+	if (!Target.IsValid())
+	{
+		return MakeErrorJson(FString::Printf(TEXT("User parameter '%s' not found"), *FullName));
+	}
+
+	System->Modify();
+	const bool bRemoved = Store.RemoveParameter(Target);
+	System->MarkPackageDirty();
+	const bool bSaved = SaveGenericPackage(System);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("system"), System->GetPathName());
+	Result->SetStringField(TEXT("name"), FullName);
+	Result->SetBoolField(TEXT("removed"), bRemoved);
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleRemoveEmitterFromSystem — detach an emitter handle from a system
+// ============================================================
+
+FString FBlueprintMCPServer::HandleRemoveEmitterFromSystem(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString SystemNameOrPath, HandleName;
+	if (!Json->TryGetStringField(TEXT("system"), SystemNameOrPath) || SystemNameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: system"));
+	}
+	if (!Json->TryGetStringField(TEXT("handleName"), HandleName) || HandleName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: handleName (the emitter handle name shown by get_niagara_system_summary)"));
+	}
+
+	UNiagaraSystem* System = FindNiagaraSystemByNameOrPath(SystemNameOrPath);
+	if (!System)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraSystem '%s' not found"), *SystemNameOrPath));
+	}
+
+	// CLAUDE-NOTE: copy the handle out before removing — RemoveEmitterHandle mutates the
+	// array, so we can't hold a reference into GetEmitterHandles() across the call.
+	bool bFound = false;
+	FNiagaraEmitterHandle ToRemove;
+	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		if (Handle.GetName().ToString().Equals(HandleName, ESearchCase::IgnoreCase))
+		{
+			ToRemove = Handle;
+			bFound = true;
+			break;
+		}
+	}
+	if (!bFound)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("No emitter handle named '%s' in system"), *HandleName));
+	}
+
+	System->Modify();
+	System->RemoveEmitterHandle(ToRemove);
+	System->RequestCompile(false);
+	System->MarkPackageDirty();
+	const bool bSaved = SaveGenericPackage(System);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("system"), System->GetPathName());
+	Result->SetStringField(TEXT("removedHandle"), HandleName);
+	Result->SetNumberField(TEXT("emitterCount"), System->GetEmitterHandles().Num());
+	Result->SetBoolField(TEXT("saved"), bSaved);
 	return JsonToString(Result);
 }

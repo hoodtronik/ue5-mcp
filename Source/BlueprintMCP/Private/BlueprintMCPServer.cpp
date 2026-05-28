@@ -970,6 +970,12 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("listModuleLibrary")));
 	Router->BindRoute(FHttpPath(TEXT("/api/set-emitter-sim-target")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("setEmitterSimTarget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-niagara-renderer")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeNiagaraRenderer")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-user-parameter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeUserParameter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-emitter-from-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeEmitterFromSystem")));
 
 	// Register TMap dispatch handlers
 	RegisterHandlers();
@@ -1167,6 +1173,9 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("addUserParameter"),
 		TEXT("setUserParameterDefault"),
 		TEXT("setEmitterSimTarget"),
+		TEXT("removeNiagaraRenderer"),
+		TEXT("removeUserParameter"),
+		TEXT("removeEmitterFromSystem"),
 	};
 
 	// Widget mutations that must NOT be wrapped in undo transactions.
@@ -1379,6 +1388,9 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("setUserParameterDefault"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleSetUserParameterDefault(B); });
 	HandlerMap.Add(TEXT("listModuleLibrary"),          [this](const TMap<FString, FString>& P, const FString&) { return HandleListModuleLibrary(P); });
 	HandlerMap.Add(TEXT("setEmitterSimTarget"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleSetEmitterSimTarget(B); });
+	HandlerMap.Add(TEXT("removeNiagaraRenderer"),      [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveNiagaraRenderer(B); });
+	HandlerMap.Add(TEXT("removeUserParameter"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveUserParameter(B); });
+	HandlerMap.Add(TEXT("removeEmitterFromSystem"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveEmitterFromSystem(B); });
 
 	// Level actor handlers
 	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
