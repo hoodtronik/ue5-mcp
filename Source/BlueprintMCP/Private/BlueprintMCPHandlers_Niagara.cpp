@@ -13,14 +13,32 @@
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraScript.h"
 #include "NiagaraTypes.h"
+#include "NiagaraCommon.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "NiagaraEmitterFactoryNew.h"
+
+// Tier 2: stack authoring
+#include "NiagaraGraph.h"
+#include "NiagaraNodeOutput.h"
+#include "NiagaraNodeFunctionCall.h"
+#include "NiagaraScriptSource.h"
+#include "NiagaraSpriteRendererProperties.h"
+#include "NiagaraMeshRendererProperties.h"
+#include "NiagaraRibbonRendererProperties.h"
+#include "NiagaraLightRendererProperties.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "NiagaraNode.h"
+#include "EdGraphSchema_Niagara.h"
+#include "NiagaraParameterStore.h"
+#include "NiagaraUserRedirectionParameterStore.h"
 
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "AssetRegistry/ARFilter.h"
 #include "UObject/SavePackage.h"
 #include "UObject/Package.h"
 #include "Dom/JsonObject.h"
@@ -86,6 +104,133 @@ namespace
 				return Cast<UNiagaraEmitter>(Data.GetAsset());
 			}
 		}
+		return nullptr;
+	}
+
+	// CLAUDE-NOTE: stage string -> ENiagaraScriptUsage. The four authorable per-emitter
+	// stages. "SpawnRate" lives in EmitterUpdate, particle init in ParticleSpawn — the
+	// caller must pick the stage where the target module actually lives.
+	bool StageToScriptUsage(const FString& Stage, ENiagaraScriptUsage& OutUsage)
+	{
+		if (Stage.Equals(TEXT("EmitterSpawn"), ESearchCase::IgnoreCase))  { OutUsage = ENiagaraScriptUsage::EmitterSpawnScript;  return true; }
+		if (Stage.Equals(TEXT("EmitterUpdate"), ESearchCase::IgnoreCase)) { OutUsage = ENiagaraScriptUsage::EmitterUpdateScript; return true; }
+		if (Stage.Equals(TEXT("ParticleSpawn"), ESearchCase::IgnoreCase)) { OutUsage = ENiagaraScriptUsage::ParticleSpawnScript; return true; }
+		if (Stage.Equals(TEXT("ParticleUpdate"), ESearchCase::IgnoreCase)){ OutUsage = ENiagaraScriptUsage::ParticleUpdateScript;return true; }
+		return false;
+	}
+
+	/** Return the per-stage UNiagaraScript on an emitter's version data. */
+	UNiagaraScript* GetStageScript(FVersionedNiagaraEmitterData* Data, ENiagaraScriptUsage Usage)
+	{
+		if (!Data) { return nullptr; }
+		switch (Usage)
+		{
+		case ENiagaraScriptUsage::EmitterSpawnScript:  return Data->EmitterSpawnScriptProps.Script;
+		case ENiagaraScriptUsage::EmitterUpdateScript: return Data->EmitterUpdateScriptProps.Script;
+		case ENiagaraScriptUsage::ParticleSpawnScript: return Data->SpawnScriptProps.Script;
+		case ENiagaraScriptUsage::ParticleUpdateScript:return Data->UpdateScriptProps.Script;
+		default: return nullptr;
+		}
+	}
+
+	/** Reach the emitter's shared UNiagaraGraph (spawn+update share one graph). */
+	UNiagaraGraph* GetEmitterGraph(FVersionedNiagaraEmitterData* Data)
+	{
+		if (!Data) { return nullptr; }
+		UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(Data->GraphSource);
+		return Source ? Source->NodeGraph : nullptr;
+	}
+
+	/** Map a type string to a Niagara type def. Returns false for unsupported types. */
+	bool ResolveNiagaraType(const FString& TypeStr, FNiagaraTypeDefinition& OutType)
+	{
+		if (TypeStr.Equals(TEXT("float"), ESearchCase::IgnoreCase))  { OutType = FNiagaraTypeDefinition::GetFloatDef();  return true; }
+		if (TypeStr.Equals(TEXT("int"), ESearchCase::IgnoreCase))    { OutType = FNiagaraTypeDefinition::GetIntDef();    return true; }
+		if (TypeStr.Equals(TEXT("bool"), ESearchCase::IgnoreCase))   { OutType = FNiagaraTypeDefinition::GetBoolDef();   return true; }
+		if (TypeStr.Equals(TEXT("vec2"), ESearchCase::IgnoreCase))   { OutType = FNiagaraTypeDefinition::GetVec2Def();   return true; }
+		if (TypeStr.Equals(TEXT("vec3"), ESearchCase::IgnoreCase) ||
+			TypeStr.Equals(TEXT("vector"), ESearchCase::IgnoreCase)) { OutType = FNiagaraTypeDefinition::GetVec3Def();   return true; }
+		if (TypeStr.Equals(TEXT("vec4"), ESearchCase::IgnoreCase))   { OutType = FNiagaraTypeDefinition::GetVec4Def();   return true; }
+		if (TypeStr.Equals(TEXT("color"), ESearchCase::IgnoreCase) ||
+			TypeStr.Equals(TEXT("linearcolor"), ESearchCase::IgnoreCase)) { OutType = FNiagaraTypeDefinition::GetColorDef(); return true; }
+		return false;
+	}
+
+	// CLAUDE-NOTE: write a JSON value into an FNiagaraVariable's data block by type.
+	// Niagara vectors are float-precision (FVector3f/4f), bool is FNiagaraBool. Handles
+	// the common authorable types. Returns false + reason on type/shape mismatch.
+	bool ApplyJsonValueToNiagaraVar(FNiagaraVariable& Var, const TSharedPtr<FJsonObject>& Json, FString& OutError)
+	{
+		const FNiagaraTypeDefinition Type = Var.GetType();
+		Var.AllocateData();
+
+		if (Type == FNiagaraTypeDefinition::GetFloatDef())
+		{
+			double V = 0.0;
+			if (!Json->TryGetNumberField(TEXT("value"), V)) { OutError = TEXT("float type expects numeric 'value'"); return false; }
+			Var.SetValue<float>(static_cast<float>(V));
+			return true;
+		}
+		if (Type == FNiagaraTypeDefinition::GetIntDef())
+		{
+			int32 V = 0;
+			if (!Json->TryGetNumberField(TEXT("value"), V)) { OutError = TEXT("int type expects integer 'value'"); return false; }
+			Var.SetValue<int32>(V);
+			return true;
+		}
+		if (Type == FNiagaraTypeDefinition::GetBoolDef())
+		{
+			bool V = false;
+			if (!Json->TryGetBoolField(TEXT("value"), V)) { OutError = TEXT("bool type expects boolean 'value'"); return false; }
+			FNiagaraBool NB; NB.SetValue(V);
+			Var.SetValue<FNiagaraBool>(NB);
+			return true;
+		}
+
+		// Vector/color types read from a JSON array "value": [x,y,...]
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!Json->TryGetArrayField(TEXT("value"), Arr))
+		{
+			OutError = TEXT("vector/color type expects 'value' as a numeric array");
+			return false;
+		}
+		auto Comp = [&](int32 Idx) -> float
+		{
+			return (Arr->IsValidIndex(Idx)) ? static_cast<float>((*Arr)[Idx]->AsNumber()) : 0.0f;
+		};
+
+		if (Type == FNiagaraTypeDefinition::GetVec2Def())
+		{
+			Var.SetValue<FVector2f>(FVector2f(Comp(0), Comp(1)));
+			return true;
+		}
+		if (Type == FNiagaraTypeDefinition::GetVec3Def())
+		{
+			Var.SetValue<FVector3f>(FVector3f(Comp(0), Comp(1), Comp(2)));
+			return true;
+		}
+		if (Type == FNiagaraTypeDefinition::GetVec4Def())
+		{
+			Var.SetValue<FVector4f>(FVector4f(Comp(0), Comp(1), Comp(2), Comp(3)));
+			return true;
+		}
+		if (Type == FNiagaraTypeDefinition::GetColorDef())
+		{
+			Var.SetValue<FLinearColor>(FLinearColor(Comp(0), Comp(1), Comp(2), Arr->IsValidIndex(3) ? Comp(3) : 1.0f));
+			return true;
+		}
+
+		OutError = TEXT("unsupported Niagara type for value assignment");
+		return false;
+	}
+
+	/** Create a renderer-properties object of the requested class on the emitter. */
+	UNiagaraRendererProperties* NewRendererByType(const FString& RendererType, UNiagaraEmitter* Owner)
+	{
+		if (RendererType.Equals(TEXT("Sprite"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraSpriteRendererProperties>(Owner, "Renderer");
+		if (RendererType.Equals(TEXT("Mesh"), ESearchCase::IgnoreCase))    return NewObject<UNiagaraMeshRendererProperties>(Owner, "Renderer");
+		if (RendererType.Equals(TEXT("Ribbon"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraRibbonRendererProperties>(Owner, "Renderer");
+		if (RendererType.Equals(TEXT("Light"), ESearchCase::IgnoreCase))   return NewObject<UNiagaraLightRendererProperties>(Owner, "Renderer");
 		return nullptr;
 	}
 }
@@ -185,6 +330,17 @@ FString FBlueprintMCPServer::HandleCreateNiagaraEmitter(const FString& Body)
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UNiagaraEmitterFactoryNew* Factory = NewObject<UNiagaraEmitterFactoryNew>();
+
+	// CLAUDE-NOTE: UNiagaraEmitterFactoryNew defaults bAddDefaultModulesAndRenderersToEmptyEmitter=true,
+	// which seeds a full working emitter (EmitterState, SpawnRate=10, SystemLocation, AddVelocity,
+	// sprite size/lifetime, Color, SolveForcesAndVelocity, + a Sprite Renderer) — it already emits.
+	// Pass bare=true to author a truly empty emitter and build it up via Tier 2 tools instead.
+	bool bBare = false;
+	if (Json->TryGetBoolField(TEXT("bare"), bBare) && bBare)
+	{
+		Factory->bAddDefaultModulesAndRenderersToEmptyEmitter = false;
+	}
+
 	UObject* NewAsset = AssetTools.CreateAsset(Name, PackagePath, UNiagaraEmitter::StaticClass(), Factory);
 	if (!NewAsset)
 	{
@@ -220,6 +376,7 @@ FString FBlueprintMCPServer::HandleCreateNiagaraEmitter(const FString& Body)
 	Result->SetStringField(TEXT("name"), Name);
 	Result->SetStringField(TEXT("packagePath"), PackagePath);
 	Result->SetStringField(TEXT("assetPath"), Emitter->GetPathName());
+	Result->SetBoolField(TEXT("bare"), bBare);
 	if (const FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData())
 	{
 		Result->SetStringField(TEXT("simTarget"), SimTargetToString(Data->SimTarget));
@@ -476,5 +633,564 @@ FString FBlueprintMCPServer::HandleGetNiagaraEmitterSummary(const FString& Body)
 	Stages->SetBoolField(TEXT("particleUpdate"), Data->UpdateScriptProps.Script != nullptr);
 	Result->SetObjectField(TEXT("stages"), Stages);
 
+	return JsonToString(Result);
+}
+
+// ============================================================
+// TIER 2 — stack authoring
+// ============================================================
+
+// CLAUDE-NOTE: Tier 2 mutates an emitter ASSET in place (graph/scripts/renderers
+// live on the emitter, not the system). After structural changes we MarkPackageDirty
+// and call UNiagaraSystem::RequestCompileForEmitter so any system already referencing
+// the emitter recompiles. The change persists on save regardless of compile timing.
+namespace
+{
+	/** Build the FVersionedNiagaraEmitter for the emitter's exposed version + kick a recompile. */
+	void RequestEmitterRecompile(UNiagaraEmitter* Emitter)
+	{
+		if (!Emitter) { return; }
+		const FVersionedNiagaraEmitter Versioned(Emitter, Emitter->GetExposedVersion().VersionGuid);
+		UNiagaraSystem::RequestCompileForEmitter(Versioned);
+	}
+
+	// CLAUDE-NOTE: UNiagaraGraph::FindOutputNode is not DLL-exported, so we find the
+	// stage's output node header-only via GetNodesOfClass + the inline GetUsage() accessor.
+	UNiagaraNodeOutput* FindStageOutputNode(UNiagaraGraph* Graph, ENiagaraScriptUsage Usage)
+	{
+		if (!Graph) { return nullptr; }
+		TArray<UNiagaraNodeOutput*> OutputNodes;
+		Graph->GetNodesOfClass<UNiagaraNodeOutput>(OutputNodes);
+		for (UNiagaraNodeOutput* Node : OutputNodes)
+		{
+			if (Node && UNiagaraScript::IsEquivalentUsage(Node->GetUsage(), Usage)) { return Node; }
+		}
+		return nullptr;
+	}
+
+	/** Find a module function-call node by its NodeGuid within an emitter graph. */
+	UNiagaraNodeFunctionCall* FindModuleNodeByGuid(UNiagaraGraph* Graph, const FGuid& NodeGuid)
+	{
+		if (!Graph || !NodeGuid.IsValid()) { return nullptr; }
+		TArray<UNiagaraNodeFunctionCall*> FunctionNodes;
+		Graph->GetNodesOfClass<UNiagaraNodeFunctionCall>(FunctionNodes);
+		for (UNiagaraNodeFunctionCall* Node : FunctionNodes)
+		{
+			if (Node && Node->NodeGuid == NodeGuid) { return Node; }
+		}
+		return nullptr;
+	}
+}
+
+// ============================================================
+// HandleSetEmitterSimTarget — CPU vs GPU compute
+// ============================================================
+
+FString FBlueprintMCPServer::HandleSetEmitterSimTarget(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, SimTargetStr;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	if (!Json->TryGetStringField(TEXT("simTarget"), SimTargetStr) || SimTargetStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: simTarget (CPU|GPU)"));
+	}
+
+	ENiagaraSimTarget NewTarget;
+	if (SimTargetStr.Equals(TEXT("CPU"), ESearchCase::IgnoreCase))      { NewTarget = ENiagaraSimTarget::CPUSim; }
+	else if (SimTargetStr.Equals(TEXT("GPU"), ESearchCase::IgnoreCase)) { NewTarget = ENiagaraSimTarget::GPUComputeSim; }
+	else { return MakeErrorJson(TEXT("simTarget must be 'CPU' or 'GPU'")); }
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	if (!Data)
+	{
+		return MakeErrorJson(TEXT("Emitter has no latest version data"));
+	}
+
+	Emitter->Modify();
+	Data->SimTarget = NewTarget;
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("simTarget"), SimTargetToString(Data->SimTarget));
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleAddNiagaraRenderer — add a renderer (Sprite/Mesh/Ribbon/Light)
+// ============================================================
+
+FString FBlueprintMCPServer::HandleAddNiagaraRenderer(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, RendererType;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	if (!Json->TryGetStringField(TEXT("rendererType"), RendererType) || RendererType.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: rendererType (Sprite|Mesh|Ribbon|Light)"));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	if (!Data)
+	{
+		return MakeErrorJson(TEXT("Emitter has no latest version data"));
+	}
+
+	UNiagaraRendererProperties* Renderer = NewRendererByType(RendererType, Emitter);
+	if (!Renderer)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Unknown rendererType '%s'. Use Sprite, Mesh, Ribbon, or Light."), *RendererType));
+	}
+
+	Emitter->Modify();
+	Emitter->AddRenderer(Renderer, Emitter->GetExposedVersion().VersionGuid);
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("rendererClass"), Renderer->GetClass()->GetName());
+	Result->SetNumberField(TEXT("rendererCount"), Data->GetRenderers().Num());
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleAddUserParameter — add a User Parameter to a system
+// ============================================================
+
+FString FBlueprintMCPServer::HandleAddUserParameter(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString SystemNameOrPath, ParamName, TypeStr;
+	if (!Json->TryGetStringField(TEXT("system"), SystemNameOrPath) || SystemNameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: system"));
+	}
+	if (!Json->TryGetStringField(TEXT("name"), ParamName) || ParamName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: name"));
+	}
+	if (!Json->TryGetStringField(TEXT("type"), TypeStr) || TypeStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: type (float|int|bool|vec2|vec3|vec4|color)"));
+	}
+
+	FNiagaraTypeDefinition TypeDef;
+	if (!ResolveNiagaraType(TypeStr, TypeDef))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Unsupported type '%s'"), *TypeStr));
+	}
+
+	UNiagaraSystem* System = FindNiagaraSystemByNameOrPath(SystemNameOrPath);
+	if (!System)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraSystem '%s' not found"), *SystemNameOrPath));
+	}
+
+	// CLAUDE-NOTE: user parameters live under the "User." namespace; the redirection
+	// store expects the prefixed name. Add it if the caller omitted it.
+	FString FullName = ParamName.StartsWith(TEXT("User.")) ? ParamName : (TEXT("User.") + ParamName);
+	const FNiagaraVariable NewVar(TypeDef, FName(*FullName));
+
+	FNiagaraUserRedirectionParameterStore& Store = System->GetExposedParameters();
+	TArray<FNiagaraVariable> Existing;
+	Store.GetParameters(Existing);
+	if (Existing.Contains(NewVar))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("User parameter '%s' already exists"), *FullName));
+	}
+
+	System->Modify();
+	const bool bAdded = Store.AddParameter(NewVar);
+	System->MarkPackageDirty();
+	const bool bSaved = SaveGenericPackage(System);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("system"), System->GetPathName());
+	Result->SetStringField(TEXT("name"), FullName);
+	Result->SetStringField(TEXT("type"), TypeDef.GetName());
+	Result->SetBoolField(TEXT("added"), bAdded);
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleSetUserParameterDefault — set a User Parameter's default value
+// ============================================================
+
+FString FBlueprintMCPServer::HandleSetUserParameterDefault(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString SystemNameOrPath, ParamName;
+	if (!Json->TryGetStringField(TEXT("system"), SystemNameOrPath) || SystemNameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: system"));
+	}
+	if (!Json->TryGetStringField(TEXT("name"), ParamName) || ParamName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: name"));
+	}
+
+	UNiagaraSystem* System = FindNiagaraSystemByNameOrPath(SystemNameOrPath);
+	if (!System)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraSystem '%s' not found"), *SystemNameOrPath));
+	}
+
+	const FString FullName = ParamName.StartsWith(TEXT("User.")) ? ParamName : (TEXT("User.") + ParamName);
+
+	FNiagaraUserRedirectionParameterStore& Store = System->GetExposedParameters();
+	TArray<FNiagaraVariable> Existing;
+	Store.GetParameters(Existing);
+
+	FNiagaraVariable Target;
+	for (const FNiagaraVariable& Var : Existing)
+	{
+		if (Var.GetName().ToString().Equals(FullName, ESearchCase::IgnoreCase))
+		{
+			Target = Var;
+			break;
+		}
+	}
+	if (!Target.IsValid())
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("User parameter '%s' not found. Add it with add_user_parameter first."), *FullName));
+	}
+
+	FString ApplyError;
+	if (!ApplyJsonValueToNiagaraVar(Target, Json.ToSharedRef(), ApplyError))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Failed to apply value: %s"), *ApplyError));
+	}
+
+	System->Modify();
+	// bAdd=false: the parameter already exists; just overwrite its data block.
+	Store.SetParameterData(Target.GetData(), Target, /*bAdd*/ false);
+	System->MarkPackageDirty();
+	const bool bSaved = SaveGenericPackage(System);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("system"), System->GetPathName());
+	Result->SetStringField(TEXT("name"), FullName);
+	Result->SetStringField(TEXT("type"), Target.GetType().GetName());
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleAddNiagaraModule — add a module script to a stack stage
+// ============================================================
+
+FString FBlueprintMCPServer::HandleAddNiagaraModule(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, Stage, ModuleScriptPath;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	if (!Json->TryGetStringField(TEXT("stage"), Stage) || Stage.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: stage (EmitterSpawn|EmitterUpdate|ParticleSpawn|ParticleUpdate)"));
+	}
+	if (!Json->TryGetStringField(TEXT("moduleScript"), ModuleScriptPath) || ModuleScriptPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: moduleScript (asset path of a UNiagaraScript module)"));
+	}
+
+	ENiagaraScriptUsage Usage;
+	if (!StageToScriptUsage(Stage, Usage))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Unknown stage '%s'"), *Stage));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	UNiagaraGraph* Graph = GetEmitterGraph(Data);
+	if (!Graph)
+	{
+		return MakeErrorJson(TEXT("Could not resolve emitter node graph"));
+	}
+
+	UNiagaraNodeOutput* OutputNode = FindStageOutputNode(Graph, Usage);
+	if (!OutputNode)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Stage '%s' has no output node on this emitter"), *Stage));
+	}
+
+	UNiagaraScript* ModuleScript = LoadObject<UNiagaraScript>(nullptr, *ModuleScriptPath);
+	if (!ModuleScript)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Could not load module script '%s'"), *ModuleScriptPath));
+	}
+
+	int32 TargetIndex = INDEX_NONE;
+	int32 IndexTmp = 0;
+	if (Json->TryGetNumberField(TEXT("index"), IndexTmp)) { TargetIndex = IndexTmp; }
+
+	Emitter->Modify();
+	Graph->Modify();
+	UNiagaraNodeFunctionCall* ModuleNode =
+		FNiagaraStackGraphUtilities::AddScriptModuleToStack(ModuleScript, *OutputNode, TargetIndex);
+	if (!ModuleNode)
+	{
+		return MakeErrorJson(TEXT("AddScriptModuleToStack returned null — module may be invalid for this stage"));
+	}
+
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("stage"), Stage);
+	Result->SetStringField(TEXT("moduleScript"), ModuleScript->GetPathName());
+	Result->SetStringField(TEXT("moduleName"), ModuleNode->GetFunctionName());
+	// CLAUDE-NOTE: return the node GUID so set_module_input can target this exact module.
+	Result->SetStringField(TEXT("moduleNodeGuid"), ModuleNode->NodeGuid.ToString());
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleSetModuleInput — set a module input to an inline constant
+// ============================================================
+
+FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, Stage, ModuleGuidStr, InputName, TypeStr;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	if (!Json->TryGetStringField(TEXT("stage"), Stage) || Stage.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: stage"));
+	}
+	if (!Json->TryGetStringField(TEXT("moduleNodeGuid"), ModuleGuidStr) || ModuleGuidStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: moduleNodeGuid (from add_niagara_module)"));
+	}
+	if (!Json->TryGetStringField(TEXT("input"), InputName) || InputName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: input (module input name, e.g. 'SpawnRate')"));
+	}
+	if (!Json->TryGetStringField(TEXT("type"), TypeStr) || TypeStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: type (float|int|vec2|vec3|vec4|color)"));
+	}
+
+	// CLAUDE-NOTE: bool/enum are NOT rapid-iteration types and take a different graph
+	// path; only the inline-literal types are supported via the override-pin default here.
+	FNiagaraTypeDefinition InputType;
+	if (!ResolveNiagaraType(TypeStr, InputType))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Unsupported type '%s'"), *TypeStr));
+	}
+	if (InputType == FNiagaraTypeDefinition::GetBoolDef())
+	{
+		return MakeErrorJson(TEXT("bool inputs are not yet supported by set_module_input"));
+	}
+
+	FGuid ModuleGuid;
+	if (!FGuid::Parse(ModuleGuidStr, ModuleGuid))
+	{
+		return MakeErrorJson(TEXT("moduleNodeGuid is not a valid GUID"));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	UNiagaraGraph* Graph = GetEmitterGraph(Data);
+	if (!Graph)
+	{
+		return MakeErrorJson(TEXT("Could not resolve emitter node graph"));
+	}
+
+	UNiagaraNodeFunctionCall* ModuleNode = FindModuleNodeByGuid(Graph, ModuleGuid);
+	if (!ModuleNode)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("No module node with GUID '%s' in this emitter"), *ModuleGuidStr));
+	}
+
+	// Build the value first so we can fail fast on a shape mismatch.
+	FNiagaraVariable ValueVar(InputType, NAME_None);
+	FString ApplyError;
+	if (!ApplyJsonValueToNiagaraVar(ValueVar, Json.ToSharedRef(), ApplyError))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Failed to apply value: %s"), *ApplyError));
+	}
+
+	// Resolve the aliased "Module.<Input>" handle for this specific module node.
+	const FNiagaraParameterHandle InputHandle = FNiagaraParameterHandle::CreateModuleParameterHandle(FName(*InputName));
+	const FNiagaraParameterHandle AliasedHandle =
+		FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(InputHandle, ModuleNode);
+
+	Emitter->Modify();
+	Graph->Modify();
+
+	UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+		*ModuleNode, AliasedHandle, InputType, FGuid(), FGuid());
+
+	// Mirror UNiagaraStackFunctionInput::SetLocalValue's override-pin branch: serialize the
+	// value to the Niagara pin default-value string, then write it onto the override pin.
+	FString PinDefaultValue;
+	const UEdGraphSchema_Niagara* NiagaraSchema = GetDefault<UEdGraphSchema_Niagara>();
+	if (!NiagaraSchema->TryGetPinDefaultValueFromNiagaraVariable(ValueVar, PinDefaultValue))
+	{
+		return MakeErrorJson(TEXT("Could not serialize value to a pin default for this type"));
+	}
+
+	OverridePin.Modify();
+	OverridePin.DefaultValue = PinDefaultValue;
+	if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+	{
+		OwningNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_module_input"), true);
+	}
+
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetStringField(TEXT("moduleName"), ModuleNode->GetFunctionName());
+	Result->SetStringField(TEXT("input"), InputName);
+	Result->SetStringField(TEXT("type"), InputType.GetName());
+	Result->SetStringField(TEXT("pinDefaultValue"), PinDefaultValue);
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleListModuleLibrary — list module scripts valid for a stage
+// ============================================================
+
+FString FBlueprintMCPServer::HandleListModuleLibrary(const TMap<FString, FString>& Params)
+{
+	// Optional stage filter: only modules whose usage bitmask supports it.
+	bool bHasStageFilter = false;
+	ENiagaraScriptUsage StageUsage = ENiagaraScriptUsage::ParticleSpawnScript;
+	if (const FString* StageVal = Params.Find(TEXT("stage")))
+	{
+		if (!StageVal->IsEmpty())
+		{
+			if (!StageToScriptUsage(*StageVal, StageUsage))
+			{
+				return MakeErrorJson(FString::Printf(TEXT("Unknown stage '%s'"), **StageVal));
+			}
+			bHasStageFilter = true;
+		}
+	}
+
+	FString PathFilter;
+	if (const FString* PathVal = Params.Find(TEXT("path"))) { PathFilter = *PathVal; }
+
+	FAssetRegistryModule& ARM = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& Registry = ARM.Get();
+
+	TArray<FAssetData> ScriptAssets;
+	Registry.GetAssetsByClass(UNiagaraScript::StaticClass()->GetClassPathName(), ScriptAssets, false);
+
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FAssetData& AssetData : ScriptAssets)
+	{
+		const FString PathName = AssetData.GetSoftObjectPath().ToString();
+		if (!PathFilter.IsEmpty() && !PathName.StartsWith(PathFilter, ESearchCase::IgnoreCase))
+		{
+			continue;
+		}
+
+		UNiagaraScript* Script = Cast<UNiagaraScript>(AssetData.GetAsset());
+		if (!Script || !Script->IsEquivalentUsage(ENiagaraScriptUsage::Module))
+		{
+			continue;
+		}
+
+		const FVersionedNiagaraScriptData* ScriptData = Script->GetLatestScriptData();
+		if (!ScriptData) { continue; }
+
+		if (bHasStageFilter &&
+			!UNiagaraScript::IsSupportedUsageContextForBitmask(ScriptData->ModuleUsageBitmask, StageUsage))
+		{
+			continue;
+		}
+
+		TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+		Item->SetStringField(TEXT("name"), AssetData.AssetName.ToString());
+		Item->SetStringField(TEXT("path"), PathName);
+		Items.Add(MakeShared<FJsonValueObject>(Item));
+	}
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("count"), Items.Num());
+	Result->SetArrayField(TEXT("modules"), Items);
+	if (bHasStageFilter) { Result->SetStringField(TEXT("stageFilter"), *Params.Find(TEXT("stage"))); }
 	return JsonToString(Result);
 }

@@ -2,10 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ensureUE, uePost, ueGet } from "../ue-bridge.js";
 
-// CLAUDE-NOTE: Niagara MCP tools (Tier 1: asset creation + introspection).
-// Mirrors the structure of material-mutation.ts / material-read.ts. Tier 2
-// (stack authoring) will land in a second pass; Tier 3 (custom node-graph)
-// is deferred per the niagara_extension_plan.
+// CLAUDE-NOTE: Niagara MCP tools (Tier 1: asset creation + introspection,
+// Tier 2: stack authoring). Mirrors the structure of material-mutation.ts /
+// material-read.ts. Tier 3 (custom node-graph authoring) is deferred per the
+// niagara_extension_plan.
 
 export function registerNiagaraTools(server: McpServer): void {
   // ---------------------------------------------------------------------------
@@ -178,6 +178,175 @@ export function registerNiagaraTools(server: McpServer): void {
       for (const r of data.renderers || []) {
         const flag = r.enabled ? "" : " [disabled]";
         lines.push(`  - ${r.class}${flag}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Stack authoring (Tier 2)
+  // ---------------------------------------------------------------------------
+
+  const STAGES = ["EmitterSpawn", "EmitterUpdate", "ParticleSpawn", "ParticleUpdate"] as const;
+  // CLAUDE-NOTE: value-bearing tools accept a scalar, bool, or numeric array; the C++
+  // side maps it to the Niagara type (float/int/bool/vec2-4/color) from the 'type' field.
+  const valueSchema = z.union([z.number(), z.boolean(), z.array(z.number())]);
+
+  server.tool(
+    "set_emitter_sim_target",
+    "Set a UNiagaraEmitter's simulation target to CPU or GPU compute. Triggers an emitter recompile.",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      simTarget: z.enum(["CPU", "GPU"]).describe("CPU or GPU compute"),
+    },
+    async ({ emitter, simTarget }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-emitter-sim-target", { emitter, simTarget });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      return { content: [{ type: "text" as const, text: `Set ${data.emitter || emitter} sim target to ${data.simTarget || simTarget} (saved: ${data.saved})` }] };
+    }
+  );
+
+  server.tool(
+    "add_niagara_renderer",
+    "Add a renderer (Sprite/Mesh/Ribbon/Light) to a UNiagaraEmitter. A Sprite renderer is the minimum needed to see particles.",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      rendererType: z.enum(["Sprite", "Mesh", "Ribbon", "Light"]).describe("Renderer class to add"),
+    },
+    async ({ emitter, rendererType }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/add-niagara-renderer", { emitter, rendererType });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Added ${data.rendererClass || rendererType} to ${data.emitter || emitter}`);
+      if (data.rendererCount !== undefined) lines.push(`Emitter now has ${data.rendererCount} renderer(s)`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "add_niagara_module",
+    "Add a module script to a stack stage on an emitter (e.g. a Spawn Rate module on ParticleSpawn). Returns the module node GUID needed by set_module_input. Use list_module_library to find module script paths.",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      stage: z.enum(STAGES).describe("Stack stage to add the module to"),
+      moduleScript: z.string().describe("Full /Game or /Niagara/... asset path of the module UNiagaraScript"),
+      index: z.number().int().optional().describe("Insertion index within the stage (default: append)"),
+    },
+    async ({ emitter, stage, moduleScript, index }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const body: Record<string, any> = { emitter, stage, moduleScript };
+      if (index !== undefined) body.index = index;
+
+      const data = await uePost("/api/add-niagara-module", body);
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Added module '${data.moduleName}' to ${data.stage} on ${data.emitter || emitter}`);
+      if (data.moduleNodeGuid) lines.push(`Module node GUID: ${data.moduleNodeGuid}  (pass to set_module_input)`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "set_module_input",
+    "Set an inline constant value on a module input (e.g. SpawnRate=100). Target the module by its node GUID from add_niagara_module. Supports float/int/vec2/vec3/vec4/color (not bool yet).",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      stage: z.enum(STAGES).describe("Stack stage the module lives on"),
+      moduleNodeGuid: z.string().describe("Module node GUID returned by add_niagara_module"),
+      input: z.string().describe("Module input name, e.g. 'SpawnRate'"),
+      type: z.enum(["float", "int", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
+      value: valueSchema.describe("Value: number for scalars, [x,y,...] array for vectors/color"),
+    },
+    async ({ emitter, stage, moduleNodeGuid, input, type, value }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-module-input", { emitter, stage, moduleNodeGuid, input, type, value });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Set ${data.moduleName}.${data.input} = ${JSON.stringify(value)} (${data.type})`);
+      if (data.pinDefaultValue) lines.push(`Pin default: ${data.pinDefaultValue}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "add_user_parameter",
+    "Add a User Parameter to a UNiagaraSystem (the uds_* values exposed to RenderStream/Blueprint). Name is auto-prefixed with 'User.' if omitted.",
+    {
+      system: z.string().describe("System name or /Game/... path"),
+      name: z.string().describe("Parameter name, e.g. 'uds_Intensity' (User. prefix added automatically)"),
+      type: z.enum(["float", "int", "bool", "vec2", "vec3", "vec4", "color"]).describe("Niagara type"),
+    },
+    async ({ system, name, type }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/add-user-parameter", { system, name, type });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Added user parameter ${data.name} : ${data.type} to ${data.system || system}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "set_user_parameter_default",
+    "Set the default value of an existing User Parameter on a UNiagaraSystem. Add it first with add_user_parameter.",
+    {
+      system: z.string().describe("System name or /Game/... path"),
+      name: z.string().describe("Parameter name (User. prefix added automatically)"),
+      value: valueSchema.describe("Value: number for scalars, [x,y,...] array for vectors/color"),
+    },
+    async ({ system, name, value }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-user-parameter-default", { system, name, value });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Set ${data.name} = ${JSON.stringify(value)} (${data.type}) on ${data.system || system}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
+    "list_module_library",
+    "List Niagara module scripts available in the project, optionally filtered to those valid for a given stack stage. Use the returned paths with add_niagara_module.",
+    {
+      stage: z.enum(STAGES).optional().describe("Only modules valid for this stage"),
+      path: z.string().optional().describe("Package-path prefix filter (e.g. '/Niagara/Modules')"),
+    },
+    async ({ stage, path }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await ueGet("/api/list-module-library", { stage: stage || "", path: path || "" });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Found ${data.count} module(s)${data.stageFilter ? ` valid for ${data.stageFilter}` : ""}`);
+      for (const m of data.modules || []) {
+        lines.push(`  ${m.name}  (${m.path})`);
       }
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }

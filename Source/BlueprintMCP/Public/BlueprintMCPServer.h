@@ -283,6 +283,15 @@ private:
 	FString HandleGetNiagaraSystemSummary(const FString& Body);
 	FString HandleGetNiagaraEmitterSummary(const FString& Body);
 
+	// ----- Niagara handlers (Tier 2: stack authoring) -----
+	FString HandleAddNiagaraModule(const FString& Body);
+	FString HandleAddNiagaraRenderer(const FString& Body);
+	FString HandleSetModuleInput(const FString& Body);
+	FString HandleAddUserParameter(const FString& Body);
+	FString HandleSetUserParameterDefault(const FString& Body);
+	FString HandleListModuleLibrary(const TMap<FString, FString>& Params);
+	FString HandleSetEmitterSimTarget(const FString& Body);
+
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);
 	FString HandleAddAnimState(const FString& Body);

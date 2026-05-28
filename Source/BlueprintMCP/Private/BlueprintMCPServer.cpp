@@ -955,6 +955,22 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/get-niagara-emitter-summary")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("getNiagaraEmitterSummary")));
 
+	// Niagara tools (Tier 2: stack authoring)
+	Router->BindRoute(FHttpPath(TEXT("/api/add-niagara-module")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addNiagaraModule")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-niagara-renderer")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addNiagaraRenderer")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-module-input")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setModuleInput")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-user-parameter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addUserParameter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-user-parameter-default")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setUserParameterDefault")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-module-library")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("listModuleLibrary")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-emitter-sim-target")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setEmitterSimTarget")));
+
 	// Register TMap dispatch handlers
 	RegisterHandlers();
 
@@ -1144,6 +1160,13 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("createNiagaraSystem"),
 		TEXT("createNiagaraEmitter"),
 		TEXT("addEmitterToSystem"),
+		// Niagara mutations (Tier 2)
+		TEXT("addNiagaraModule"),
+		TEXT("addNiagaraRenderer"),
+		TEXT("setModuleInput"),
+		TEXT("addUserParameter"),
+		TEXT("setUserParameterDefault"),
+		TEXT("setEmitterSimTarget"),
 	};
 
 	// Widget mutations that must NOT be wrapped in undo transactions.
@@ -1347,6 +1370,15 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("listNiagaraSystems"),         [this](const TMap<FString, FString>& P, const FString&) { return HandleListNiagaraSystems(P); });
 	HandlerMap.Add(TEXT("getNiagaraSystemSummary"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraSystemSummary(B); });
 	HandlerMap.Add(TEXT("getNiagaraEmitterSummary"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraEmitterSummary(B); });
+
+	// Niagara handlers (Tier 2)
+	HandlerMap.Add(TEXT("addNiagaraModule"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraModule(B); });
+	HandlerMap.Add(TEXT("addNiagaraRenderer"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraRenderer(B); });
+	HandlerMap.Add(TEXT("setModuleInput"),             [this](const TMap<FString, FString>&, const FString& B) { return HandleSetModuleInput(B); });
+	HandlerMap.Add(TEXT("addUserParameter"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddUserParameter(B); });
+	HandlerMap.Add(TEXT("setUserParameterDefault"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleSetUserParameterDefault(B); });
+	HandlerMap.Add(TEXT("listModuleLibrary"),          [this](const TMap<FString, FString>& P, const FString&) { return HandleListModuleLibrary(P); });
+	HandlerMap.Add(TEXT("setEmitterSimTarget"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleSetEmitterSimTarget(B); });
 
 	// Level actor handlers
 	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
