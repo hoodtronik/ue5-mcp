@@ -17,7 +17,11 @@ public class BlueprintMCP : ModuleRules
 			"JsonUtilities",
 			"HTTPServer",
 			"Sockets",
-			"Networking"
+			"Networking",
+			// CLAUDE-NOTE: Niagara runtime modules — needed for UNiagaraSystem/UNiagaraEmitter
+			// references in handler code. NiagaraEditor is editor-only (see Private list).
+			"Niagara",
+			"NiagaraCore"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -34,7 +38,10 @@ public class BlueprintMCP : ModuleRules
 			"Slate",
 			"UMG",
 			"UMGEditor",
-			"SlateCore"
+			"SlateCore",
+			// CLAUDE-NOTE: NiagaraEditor exposes factories, the stack ViewModel, and module
+			// library helpers — all editor-only. Wrap usage with WITH_EDITOR.
+			"NiagaraEditor"
 		});
 	}
 }
