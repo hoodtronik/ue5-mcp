@@ -941,6 +941,20 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/delete-actor")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("delete-actor")));
 
+	// Niagara tools (Tier 1: asset creation + introspection)
+	Router->BindRoute(FHttpPath(TEXT("/api/create-niagara-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createNiagaraSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-niagara-emitter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createNiagaraEmitter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-emitter-to-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addEmitterToSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-niagara-systems")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("listNiagaraSystems")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-niagara-system-summary")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getNiagaraSystemSummary")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-niagara-emitter-summary")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getNiagaraEmitterSummary")));
+
 	// Register TMap dispatch handlers
 	RegisterHandlers();
 
@@ -1126,6 +1140,10 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("set-actor-property"),
 		TEXT("spawn-actor"),
 		TEXT("delete-actor"),
+		// Niagara mutations (Tier 1)
+		TEXT("createNiagaraSystem"),
+		TEXT("createNiagaraEmitter"),
+		TEXT("addEmitterToSystem"),
 	};
 
 	// Widget mutations that must NOT be wrapped in undo transactions.
@@ -1321,6 +1339,14 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("setWidgetProperty"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleSetWidgetProperty(B); });
 	HandlerMap.Add(TEXT("moveWidget"),              [this](const TMap<FString, FString>&, const FString& B) { return HandleMoveWidget(B); });
 	HandlerMap.Add(TEXT("createWidgetBlueprint"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateWidgetBlueprint(B); });
+
+	// Niagara handlers (Tier 1)
+	HandlerMap.Add(TEXT("createNiagaraSystem"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateNiagaraSystem(B); });
+	HandlerMap.Add(TEXT("createNiagaraEmitter"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateNiagaraEmitter(B); });
+	HandlerMap.Add(TEXT("addEmitterToSystem"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleAddEmitterToSystem(B); });
+	HandlerMap.Add(TEXT("listNiagaraSystems"),         [this](const TMap<FString, FString>& P, const FString&) { return HandleListNiagaraSystems(P); });
+	HandlerMap.Add(TEXT("getNiagaraSystemSummary"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraSystemSummary(B); });
+	HandlerMap.Add(TEXT("getNiagaraEmitterSummary"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraEmitterSummary(B); });
 
 	// Level actor handlers
 	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });

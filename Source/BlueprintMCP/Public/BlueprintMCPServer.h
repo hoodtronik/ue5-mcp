@@ -275,6 +275,14 @@ private:
 	FString HandleBeginTransaction(const FString& Body);
 	FString HandleEndTransaction(const FString& Body);
 
+	// ----- Niagara handlers (Tier 1: asset creation + introspection) -----
+	FString HandleCreateNiagaraSystem(const FString& Body);
+	FString HandleCreateNiagaraEmitter(const FString& Body);
+	FString HandleAddEmitterToSystem(const FString& Body);
+	FString HandleListNiagaraSystems(const TMap<FString, FString>& Params);
+	FString HandleGetNiagaraSystemSummary(const FString& Body);
+	FString HandleGetNiagaraEmitterSummary(const FString& Body);
+
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);
 	FString HandleAddAnimState(const FString& Body);
