@@ -313,27 +313,50 @@ export function registerNiagaraTools(server: McpServer): void {
     }
   );
 
+  // CLAUDE-NOTE: a single curve key. value is an array of components matching `type`:
+  // float=[v], vec2=[x,y], vec3=[x,y,z], vec4=[x,y,z,w], color=[r,g,b,a]. `time` is the
+  // curve key time (for over-life curves this is Normalized Age, 0..1).
+  const curveKeySchema = z.object({
+    time: z.number(),
+    value: z.array(z.number()),
+  });
+
   server.tool(
     "set_module_input",
-    "Set an inline constant value on a module input (e.g. SpawnRate=100). Target the module by its node GUID from add_niagara_module. Supports float/int/vec2/vec3/vec4/color (not bool yet).",
+    "Set a module input to either an inline CONSTANT (valueMode='constant', default) or a CURVE over life (valueMode='curve'). Target the module by its node GUID from add_niagara_module/list_emitter_modules. Constant supports float/int/bool/vec2/vec3/vec4/color; curve supports float/vec2/vec3/vec4/color (grafts a *FromCurve dynamic input — size/color/velocity over life). Re-calling with the same curve input updates its keys in place (idempotent for the iterate loop).",
     {
       emitter: z.string().describe("Emitter name or /Game/... path"),
       stage: z.enum(STAGES).describe("Stack stage the module lives on"),
       moduleNodeGuid: z.string().describe("Module node GUID returned by add_niagara_module"),
       input: z.string().describe("Module input name, e.g. 'SpawnRate'"),
       type: z.enum(["float", "int", "bool", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
-      value: valueSchema.describe("Value: number for scalars, boolean for bool, [x,y,...] array for vectors/color"),
+      valueMode: z.enum(["constant", "curve"]).default("constant").describe("'constant' (inline literal) or 'curve' (value over life via a *FromCurve dynamic input)"),
+      value: valueSchema.optional().describe("constant mode: number for scalars, boolean for bool, [x,y,...] array for vectors/color"),
+      curveKeys: z.array(curveKeySchema).optional().describe("curve mode: keys [{time, value:[...]}] sorted by time. value length must match type (float=1, vec2=2, vec3=3, vec4=4, color=4 as r,g,b,a). For over-life curves, time is Normalized Age 0..1."),
+      curveInterp: z.enum(["cubic", "linear", "constant"]).default("cubic").describe("curve mode: key interpolation. cubic = smooth auto-tangents (organic default)."),
     },
-    async ({ emitter, stage, moduleNodeGuid, input, type, value }) => {
+    async ({ emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
-      const data = await uePost("/api/set-module-input", { emitter, stage, moduleNodeGuid, input, type, value });
+      if (valueMode === "curve" && (!curveKeys || curveKeys.length === 0)) {
+        return { content: [{ type: "text" as const, text: "Error: valueMode='curve' requires a non-empty curveKeys array." }] };
+      }
+      if (valueMode === "constant" && value === undefined) {
+        return { content: [{ type: "text" as const, text: "Error: valueMode='constant' requires a value." }] };
+      }
+
+      const data = await uePost("/api/set-module-input", { emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp });
       if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
 
       const lines: string[] = [];
-      lines.push(`Set ${data.moduleName}.${data.input} = ${JSON.stringify(value)} (${data.type})`);
-      if (data.pinDefaultValue) lines.push(`Pin default: ${data.pinDefaultValue}`);
+      if (data.valueMode === "curve") {
+        lines.push(`Set ${data.moduleName}.${data.input} = curve (${data.type}), ${data.keyCount} key(s), interp=${curveInterp}`);
+        if (data.reusedExistingCurve) lines.push(`Updated existing curve in place (no new node).`);
+      } else {
+        lines.push(`Set ${data.moduleName}.${data.input} = ${JSON.stringify(value)} (${data.type})`);
+        if (data.pinDefaultValue) lines.push(`Pin default: ${data.pinDefaultValue}`);
+      }
       if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }

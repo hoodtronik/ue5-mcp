@@ -36,6 +36,23 @@
 #include "NiagaraParameterMapHistory.h"
 #include "UObject/UnrealType.h"
 
+// CLAUDE-NOTE: curve / dynamic-input support for set_module_input. Curve inputs
+// (size/color/velocity over life) are authored by grafting a "*FromCurve" dynamic
+// input onto the module-input override pin, then setting that dynamic input's Data
+// Interface input to a curve DI whose FRichCurve channels we populate. All done at
+// the graph/pin level (no Stack ViewModel) via the exported SetDynamicInputForFunctionInput
+// + SetDataInterfaceValueForFunctionInput. UNiagaraNodeInput::GetDataInterface() is NOT
+// exported (MinimalAPI), so the fast-path reads the DI via reflection on the private
+// DataInterface UPROPERTY.
+#include "NiagaraNodeInput.h"
+#include "NiagaraDataInterfaceCurveBase.h"
+#include "NiagaraDataInterfaceCurve.h"
+#include "NiagaraDataInterfaceVector2DCurve.h"
+#include "NiagaraDataInterfaceVectorCurve.h"
+#include "NiagaraDataInterfaceVector4Curve.h"
+#include "NiagaraDataInterfaceColorCurve.h"
+#include "Curves/RichCurve.h"
+
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -238,6 +255,218 @@ namespace
 		if (RendererType.Equals(TEXT("Mesh"), ESearchCase::IgnoreCase))    return NewObject<UNiagaraMeshRendererProperties>(Owner, NAME_None, RF_Transactional);
 		if (RendererType.Equals(TEXT("Ribbon"), ESearchCase::IgnoreCase))  return NewObject<UNiagaraRibbonRendererProperties>(Owner, NAME_None, RF_Transactional);
 		if (RendererType.Equals(TEXT("Light"), ESearchCase::IgnoreCase))   return NewObject<UNiagaraLightRendererProperties>(Owner, NAME_None, RF_Transactional);
+		return nullptr;
+	}
+
+	// ============================================================
+	// Curve / dynamic-input helpers (set_module_input valueMode="curve")
+	// ============================================================
+
+	/** One JSON curve key: a time plus 1-4 component values (float=1, vec=2/3/4, color=rgba). */
+	struct FCurveKeyJson
+	{
+		float Time = 0.0f;
+		TArray<float> Value;
+	};
+
+	/** Maps a module-input type string to its curve dynamic-input asset + curve DI class + component count. */
+	struct FCurveTypeInfo
+	{
+		const TCHAR* DynInputPath = nullptr;   // the "*FromCurve" dynamic input UNiagaraScript
+		UClass*      DIClass      = nullptr;    // the concrete curve data-interface class
+		int32        NumComponents = 0;
+	};
+
+	bool ResolveCurveTypeInfo(const FString& TypeStr, FCurveTypeInfo& Out)
+	{
+		// CLAUDE-NOTE: asset paths verified present in UE 5.6 at
+		// /Niagara/DynamicInputs/ValueFromCurve/. int/bool intentionally unsupported in
+		// curve mode (no standard *FromCurve dynamic input for them).
+		if (TypeStr.Equals(TEXT("float"), ESearchCase::IgnoreCase))
+		{
+			Out = { TEXT("/Niagara/DynamicInputs/ValueFromCurve/FloatFromCurve.FloatFromCurve"), UNiagaraDataInterfaceCurve::StaticClass(), 1 };
+			return true;
+		}
+		if (TypeStr.Equals(TEXT("vec2"), ESearchCase::IgnoreCase))
+		{
+			Out = { TEXT("/Niagara/DynamicInputs/ValueFromCurve/Vector2DFromCurve.Vector2DFromCurve"), UNiagaraDataInterfaceVector2DCurve::StaticClass(), 2 };
+			return true;
+		}
+		if (TypeStr.Equals(TEXT("vec3"), ESearchCase::IgnoreCase) || TypeStr.Equals(TEXT("vector"), ESearchCase::IgnoreCase))
+		{
+			Out = { TEXT("/Niagara/DynamicInputs/ValueFromCurve/VectorFromCurve.VectorFromCurve"), UNiagaraDataInterfaceVectorCurve::StaticClass(), 3 };
+			return true;
+		}
+		if (TypeStr.Equals(TEXT("vec4"), ESearchCase::IgnoreCase))
+		{
+			Out = { TEXT("/Niagara/DynamicInputs/ValueFromCurve/Vector4FromCurve.Vector4FromCurve"), UNiagaraDataInterfaceVector4Curve::StaticClass(), 4 };
+			return true;
+		}
+		if (TypeStr.Equals(TEXT("color"), ESearchCase::IgnoreCase) || TypeStr.Equals(TEXT("linearcolor"), ESearchCase::IgnoreCase))
+		{
+			Out = { TEXT("/Niagara/DynamicInputs/ValueFromCurve/ColorFromCurve.ColorFromCurve"), UNiagaraDataInterfaceColorCurve::StaticClass(), 4 };
+			return true;
+		}
+		return false;
+	}
+
+	/** Read the "curveKeys" JSON array: [{ "time": t, "value": [c0, c1, ...] }, ...]. */
+	bool ParseCurveKeysJson(const TSharedRef<FJsonObject>& Json, int32 NumComponents, TArray<FCurveKeyJson>& OutKeys, FString& OutError)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!Json->TryGetArrayField(TEXT("curveKeys"), Arr) || Arr->Num() == 0)
+		{
+			OutError = TEXT("curve mode expects a non-empty 'curveKeys' array of { time, value:[...] }");
+			return false;
+		}
+		for (int32 i = 0; i < Arr->Num(); ++i)
+		{
+			const TSharedPtr<FJsonObject>* KeyObj = nullptr;
+			if (!(*Arr)[i]->TryGetObject(KeyObj))
+			{
+				OutError = FString::Printf(TEXT("curveKeys[%d] is not an object"), i);
+				return false;
+			}
+			double T = 0.0;
+			if (!(*KeyObj)->TryGetNumberField(TEXT("time"), T))
+			{
+				OutError = FString::Printf(TEXT("curveKeys[%d] missing numeric 'time'"), i);
+				return false;
+			}
+			const TArray<TSharedPtr<FJsonValue>>* ValArr = nullptr;
+			if (!(*KeyObj)->TryGetArrayField(TEXT("value"), ValArr) || ValArr->Num() < NumComponents)
+			{
+				OutError = FString::Printf(TEXT("curveKeys[%d] 'value' must be a numeric array with >= %d components"), i, NumComponents);
+				return false;
+			}
+			FCurveKeyJson Key;
+			Key.Time = static_cast<float>(T);
+			for (int32 c = 0; c < NumComponents; ++c)
+			{
+				Key.Value.Add(static_cast<float>((*ValArr)[c]->AsNumber()));
+			}
+			OutKeys.Add(MoveTemp(Key));
+		}
+		return true;
+	}
+
+	/** Fill one FRichCurve channel from the parsed keys, reading component index Comp from each key. */
+	void FillRichCurve(FRichCurve& Curve, const TArray<FCurveKeyJson>& Keys, int32 Comp, ERichCurveInterpMode Interp)
+	{
+		Curve.Reset(); // replace, don't append — keeps the iterate-loop idempotent
+		for (const FCurveKeyJson& Key : Keys)
+		{
+			const FKeyHandle Handle = Curve.AddKey(Key.Time, Key.Value.IsValidIndex(Comp) ? Key.Value[Comp] : 0.0f);
+			Curve.SetKeyInterpMode(Handle, Interp);
+			if (Interp == RCIM_Cubic)
+			{
+				Curve.SetKeyTangentMode(Handle, RCTM_Auto);
+			}
+		}
+		if (Interp == RCIM_Cubic)
+		{
+			Curve.AutoSetTangents();
+		}
+	}
+
+	/** Populate a curve DI's channels from the parsed keys, then rebuild its LUT. */
+	bool PopulateCurveDI(UNiagaraDataInterface* DI, const FString& TypeStr, const TArray<FCurveKeyJson>& Keys, ERichCurveInterpMode Interp, FString& OutError)
+	{
+		if (UNiagaraDataInterfaceCurve* C = Cast<UNiagaraDataInterfaceCurve>(DI))
+		{
+			FillRichCurve(C->Curve, Keys, 0, Interp);
+		}
+		else if (UNiagaraDataInterfaceVector2DCurve* V2 = Cast<UNiagaraDataInterfaceVector2DCurve>(DI))
+		{
+			FillRichCurve(V2->XCurve, Keys, 0, Interp);
+			FillRichCurve(V2->YCurve, Keys, 1, Interp);
+		}
+		else if (UNiagaraDataInterfaceVectorCurve* V3 = Cast<UNiagaraDataInterfaceVectorCurve>(DI))
+		{
+			FillRichCurve(V3->XCurve, Keys, 0, Interp);
+			FillRichCurve(V3->YCurve, Keys, 1, Interp);
+			FillRichCurve(V3->ZCurve, Keys, 2, Interp);
+		}
+		else if (UNiagaraDataInterfaceVector4Curve* V4 = Cast<UNiagaraDataInterfaceVector4Curve>(DI))
+		{
+			FillRichCurve(V4->XCurve, Keys, 0, Interp);
+			FillRichCurve(V4->YCurve, Keys, 1, Interp);
+			FillRichCurve(V4->ZCurve, Keys, 2, Interp);
+			FillRichCurve(V4->WCurve, Keys, 3, Interp);
+		}
+		else if (UNiagaraDataInterfaceColorCurve* CC = Cast<UNiagaraDataInterfaceColorCurve>(DI))
+		{
+			FillRichCurve(CC->RedCurve,   Keys, 0, Interp);
+			FillRichCurve(CC->GreenCurve, Keys, 1, Interp);
+			FillRichCurve(CC->BlueCurve,  Keys, 2, Interp);
+			FillRichCurve(CC->AlphaCurve, Keys, 3, Interp);
+		}
+		else
+		{
+			OutError = TEXT("data interface is not a recognized curve type");
+			return false;
+		}
+
+		// CLAUDE-NOTE: UpdateLUT() is the exported (NIAGARA_API) lookup-table rebuild — the
+		// runtime sampler reads the LUT, not the FRichCurve, so this is mandatory after edits.
+		Cast<UNiagaraDataInterfaceCurveBase>(DI)->UpdateLUT();
+		return true;
+	}
+
+	/** Read a UNiagaraNodeInput's data interface via reflection (GetDataInterface() is not exported). */
+	UNiagaraDataInterface* GetDataInterfaceFromInputNode(UNiagaraNodeInput* InputNode)
+	{
+		if (!InputNode)
+		{
+			return nullptr;
+		}
+		// CLAUDE-NOTE: UNiagaraNodeInput is UCLASS(MinimalAPI) and the DataInterface member is
+		// private with no exported accessor; reflect the UPROPERTY to avoid an LNK2019.
+		FObjectProperty* Prop = FindFProperty<FObjectProperty>(UNiagaraNodeInput::StaticClass(), TEXT("DataInterface"));
+		if (!Prop)
+		{
+			return nullptr;
+		}
+		return Cast<UNiagaraDataInterface>(Prop->GetObjectPropertyValue_InContainer(InputNode));
+	}
+
+	/** Walk upstream from a node through input pins, returning the first curve DI found (fast-path reuse). */
+	UNiagaraDataInterfaceCurveBase* FindCurveDIUpstream(UEdGraphNode* StartNode)
+	{
+		if (!StartNode)
+		{
+			return nullptr;
+		}
+		TSet<UEdGraphNode*> Visited;
+		TArray<UEdGraphNode*> Queue;
+		Queue.Add(StartNode);
+		Visited.Add(StartNode);
+		int32 Guard = 0;
+		while (Queue.Num() > 0 && Guard++ < 256)
+		{
+			UEdGraphNode* Node = Queue.Pop();
+			if (UNiagaraNodeInput* InputNode = Cast<UNiagaraNodeInput>(Node))
+			{
+				if (UNiagaraDataInterfaceCurveBase* CurveDI = Cast<UNiagaraDataInterfaceCurveBase>(GetDataInterfaceFromInputNode(InputNode)))
+				{
+					return CurveDI;
+				}
+			}
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (Pin && Pin->Direction == EGPD_Input)
+				{
+					for (UEdGraphPin* Linked : Pin->LinkedTo)
+					{
+						if (Linked && Linked->GetOwningNode() && !Visited.Contains(Linked->GetOwningNode()))
+						{
+							Visited.Add(Linked->GetOwningNode());
+							Queue.Add(Linked->GetOwningNode());
+						}
+					}
+				}
+			}
+		}
 		return nullptr;
 	}
 }
@@ -1179,6 +1408,153 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 				TEXT("Input '%s' on module '%s' is type '%s', not '%s'. Use list_module_inputs to check types."),
 				*InputName, *ModuleNode->GetFunctionName(), *MatchedInput->GetType().GetName(), *InputType.GetName()));
 		}
+	}
+
+	// ---- curve / dynamic-input mode ------------------------------------------
+	// CLAUDE-NOTE: valueMode="curve" grafts a *FromCurve dynamic input onto the input's
+	// override pin and writes an FRichCurve into its data interface (size/color/velocity
+	// over life). Re-setting the SAME curve input reuses the existing graft (fast path) so
+	// the iterate-on-screenshot loop stays idempotent. Switching an input from a different
+	// override type to a curve is not yet supported (the engine's teardown helper isn't
+	// exported) — we return a clean error rather than tripping the setters' LinkedTo==0 check.
+	FString ValueMode = TEXT("constant");
+	Json->TryGetStringField(TEXT("valueMode"), ValueMode);
+	if (ValueMode.Equals(TEXT("curve"), ESearchCase::IgnoreCase))
+	{
+		FCurveTypeInfo CurveInfo;
+		if (!ResolveCurveTypeInfo(TypeStr, CurveInfo))
+		{
+			return MakeErrorJson(FString::Printf(TEXT("curve mode supports float/vec2/vec3/vec4/color, not '%s'"), *TypeStr));
+		}
+
+		TArray<FCurveKeyJson> Keys;
+		FString KeyError;
+		if (!ParseCurveKeysJson(Json.ToSharedRef(), CurveInfo.NumComponents, Keys, KeyError))
+		{
+			return MakeErrorJson(KeyError);
+		}
+
+		ERichCurveInterpMode Interp = RCIM_Cubic; // smooth default suits organic looks
+		FString InterpStr;
+		if (Json->TryGetStringField(TEXT("curveInterp"), InterpStr))
+		{
+			if (InterpStr.Equals(TEXT("linear"), ESearchCase::IgnoreCase))        { Interp = RCIM_Linear; }
+			else if (InterpStr.Equals(TEXT("constant"), ESearchCase::IgnoreCase)) { Interp = RCIM_Constant; }
+			else if (InterpStr.Equals(TEXT("cubic"), ESearchCase::IgnoreCase))    { Interp = RCIM_Cubic; }
+			else { return MakeErrorJson(TEXT("curveInterp must be cubic|linear|constant")); }
+		}
+
+		const FNiagaraParameterHandle InputHandle = FNiagaraParameterHandle::CreateModuleParameterHandle(FName(*InputName));
+		const FNiagaraParameterHandle AliasedHandle =
+			FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(InputHandle, ModuleNode);
+
+		Emitter->Modify();
+		Graph->Modify();
+
+		UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			*ModuleNode, AliasedHandle, InputType, FGuid(), FGuid());
+
+		bool bReused = false;
+		if (OverridePin.LinkedTo.Num() > 0)
+		{
+			// Existing graft — reuse only if it's a *FromCurve dynamic input feeding a curve DI.
+			UEdGraphNode* LinkedNode = OverridePin.LinkedTo[0]->GetOwningNode();
+			UNiagaraDataInterfaceCurveBase* ExistingDI =
+				Cast<UNiagaraNodeFunctionCall>(LinkedNode) ? FindCurveDIUpstream(LinkedNode) : nullptr;
+			if (!ExistingDI)
+			{
+				return MakeErrorJson(TEXT("This input already has a non-curve override. Clear it in the Niagara editor before setting a curve (switching override types via MCP is not yet supported)."));
+			}
+			ExistingDI->Modify();
+			FString PopError;
+			if (!PopulateCurveDI(ExistingDI, TypeStr, Keys, Interp, PopError))
+			{
+				return MakeErrorJson(PopError);
+			}
+			bReused = true;
+		}
+		else
+		{
+			// Fresh graft: load the *FromCurve dynamic input and splice it onto the override pin.
+			UNiagaraScript* DynScript = LoadObject<UNiagaraScript>(nullptr, CurveInfo.DynInputPath);
+			if (!DynScript)
+			{
+				return MakeErrorJson(FString::Printf(TEXT("Could not load curve dynamic input '%s'"), CurveInfo.DynInputPath));
+			}
+			UNiagaraNodeFunctionCall* DynNode = nullptr;
+			FNiagaraStackGraphUtilities::SetDynamicInputForFunctionInput(OverridePin, DynScript, DynNode);
+			if (!DynNode)
+			{
+				return MakeErrorJson(TEXT("Failed to graft the curve dynamic input onto the override pin"));
+			}
+
+			// Discover the dynamic input's data-interface (curve) input by type, then create the curve DI on it.
+			TArray<FNiagaraVariable> DynInputs;
+			FCompileConstantResolver DynResolver;
+			FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+				*DynNode, DynInputs, DynResolver,
+				FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly,
+				/*bIgnoreDisabled*/ false);
+
+			const FNiagaraVariable* DIInput = nullptr;
+			for (const FNiagaraVariable& Var : DynInputs)
+			{
+				if (Var.GetType().IsDataInterface() && Var.GetType().GetClass() &&
+					Var.GetType().GetClass()->IsChildOf(UNiagaraDataInterfaceCurveBase::StaticClass()))
+				{
+					DIInput = &Var;
+					break;
+				}
+			}
+			if (!DIInput)
+			{
+				return MakeErrorJson(TEXT("Curve dynamic input has no curve data-interface input (unexpected asset layout)"));
+			}
+
+			FString DIInputName = DIInput->GetName().ToString();
+			if (DIInputName.StartsWith(TEXT("Module."))) { DIInputName = DIInputName.RightChop(7); }
+			const FNiagaraParameterHandle DIHandle = FNiagaraParameterHandle::CreateModuleParameterHandle(FName(*DIInputName));
+			const FNiagaraParameterHandle DIAliased = FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(DIHandle, DynNode);
+			const FNiagaraTypeDefinition DIType(CurveInfo.DIClass);
+
+			UEdGraphPin& DIOverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+				*DynNode, DIAliased, DIType, FGuid(), FGuid());
+
+			UNiagaraDataInterface* OutDI = nullptr;
+			FNiagaraStackGraphUtilities::SetDataInterfaceValueForFunctionInput(
+				DIOverridePin, CurveInfo.DIClass, DIAliased.GetParameterHandleString().ToString(), OutDI);
+			if (!OutDI)
+			{
+				return MakeErrorJson(TEXT("Failed to create the curve data interface on the dynamic input"));
+			}
+			OutDI->Modify();
+			FString PopError;
+			if (!PopulateCurveDI(OutDI, TypeStr, Keys, Interp, PopError))
+			{
+				return MakeErrorJson(PopError);
+			}
+
+			if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+			{
+				OwningNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_module_input curve"), true);
+			}
+			DynNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_module_input curve"), true);
+		}
+
+		Emitter->MarkPackageDirty();
+		RequestEmitterRecompile(Emitter);
+		const bool bSaved = SaveGenericPackage(Emitter);
+
+		TSharedRef<FJsonObject> CurveResult = MakeShared<FJsonObject>();
+		CurveResult->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+		CurveResult->SetStringField(TEXT("moduleName"), ModuleNode->GetFunctionName());
+		CurveResult->SetStringField(TEXT("input"), InputName);
+		CurveResult->SetStringField(TEXT("type"), InputType.GetName());
+		CurveResult->SetStringField(TEXT("valueMode"), TEXT("curve"));
+		CurveResult->SetNumberField(TEXT("keyCount"), Keys.Num());
+		CurveResult->SetBoolField(TEXT("reusedExistingCurve"), bReused);
+		CurveResult->SetBoolField(TEXT("saved"), bSaved);
+		return JsonToString(CurveResult);
 	}
 
 	// Build the value first so we can fail fast on a shape mismatch.
