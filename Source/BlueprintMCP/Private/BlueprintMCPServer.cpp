@@ -980,6 +980,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("listEmitterModules")));
 	Router->BindRoute(FHttpPath(TEXT("/api/list-module-inputs")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("listModuleInputs")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-renderer-property")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setRendererProperty")));
 
 	// Register TMap dispatch handlers
 	RegisterHandlers();
@@ -1180,6 +1182,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("removeNiagaraRenderer"),
 		TEXT("removeUserParameter"),
 		TEXT("removeEmitterFromSystem"),
+		TEXT("setRendererProperty"),
 	};
 
 	// Widget mutations that must NOT be wrapped in undo transactions.
@@ -1397,6 +1400,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("removeEmitterFromSystem"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveEmitterFromSystem(B); });
 	HandlerMap.Add(TEXT("listEmitterModules"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleListEmitterModules(B); });
 	HandlerMap.Add(TEXT("listModuleInputs"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleListModuleInputs(B); });
+	HandlerMap.Add(TEXT("setRendererProperty"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleSetRendererProperty(B); });
 
 	// Level actor handlers
 	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });

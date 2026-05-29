@@ -34,6 +34,7 @@
 #include "NiagaraParameterStore.h"
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "NiagaraParameterMapHistory.h"
+#include "UObject/UnrealType.h"
 
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
@@ -1142,6 +1143,44 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 		return MakeErrorJson(FString::Printf(TEXT("No module node with GUID '%s' in this emitter"), *ModuleGuidStr));
 	}
 
+	// CLAUDE-NOTE: validate the input exists on this module and the type matches BEFORE
+	// touching the graph. Without this, GetOrCreateStackFunctionInputOverridePin happily
+	// creates an override for a non-existent input (junk that silently does nothing). Snap
+	// InputName to the module's exact spelling/case so the aliased handle resolves correctly.
+	{
+		TArray<FNiagaraVariable> ModuleInputs;
+		FCompileConstantResolver Resolver;
+		FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+			*ModuleNode, ModuleInputs, Resolver,
+			FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly,
+			/*bIgnoreDisabled*/ false);
+
+		const FNiagaraVariable* MatchedInput = nullptr;
+		for (const FNiagaraVariable& Var : ModuleInputs)
+		{
+			FString BareName = Var.GetName().ToString();
+			if (BareName.StartsWith(TEXT("Module."))) { BareName = BareName.RightChop(7); }
+			if (BareName.Equals(InputName, ESearchCase::IgnoreCase))
+			{
+				MatchedInput = &Var;
+				InputName = BareName; // exact spelling/case for the handle below
+				break;
+			}
+		}
+		if (!MatchedInput)
+		{
+			return MakeErrorJson(FString::Printf(
+				TEXT("Input '%s' not found on module '%s'. Use list_module_inputs to see valid input names."),
+				*InputName, *ModuleNode->GetFunctionName()));
+		}
+		if (MatchedInput->GetType() != InputType)
+		{
+			return MakeErrorJson(FString::Printf(
+				TEXT("Input '%s' on module '%s' is type '%s', not '%s'. Use list_module_inputs to check types."),
+				*InputName, *ModuleNode->GetFunctionName(), *MatchedInput->GetType().GetName(), *InputType.GetName()));
+		}
+	}
+
 	// Build the value first so we can fail fast on a shape mismatch.
 	FNiagaraVariable ValueVar(InputType, NAME_None);
 	FString ApplyError;
@@ -1613,5 +1652,102 @@ FString FBlueprintMCPServer::HandleListModuleInputs(const FString& Body)
 	Result->SetStringField(TEXT("moduleNodeGuid"), ModuleGuidStr);
 	Result->SetNumberField(TEXT("count"), Items.Num());
 	Result->SetArrayField(TEXT("inputs"), Items);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleSetRendererProperty — set any property on a renderer by index
+// ============================================================
+
+FString FBlueprintMCPServer::HandleSetRendererProperty(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString NameOrPath, PropertyName, PropertyValue;
+	if (!Json->TryGetStringField(TEXT("emitter"), NameOrPath) || NameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: emitter"));
+	}
+	int32 Index = 0;
+	if (!Json->TryGetNumberField(TEXT("index"), Index))
+	{
+		return MakeErrorJson(TEXT("Missing required field: index (renderer index from get_niagara_emitter_summary)"));
+	}
+	if (!Json->TryGetStringField(TEXT("property"), PropertyName) || PropertyName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: property (e.g. 'Material')"));
+	}
+	if (!Json->TryGetStringField(TEXT("value"), PropertyValue))
+	{
+		return MakeErrorJson(TEXT("Missing required field: value (UE import-text, e.g. an asset path '/Game/.../M_Glow.M_Glow')"));
+	}
+
+	UNiagaraEmitter* Emitter = FindNiagaraEmitterByNameOrPath(NameOrPath);
+	if (!Emitter)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraEmitter '%s' not found"), *NameOrPath));
+	}
+
+	FVersionedNiagaraEmitterData* Data = Emitter->GetLatestEmitterData();
+	if (!Data)
+	{
+		return MakeErrorJson(TEXT("Emitter has no latest version data"));
+	}
+
+	const TArray<UNiagaraRendererProperties*>& Renderers = Data->GetRenderers();
+	if (!Renderers.IsValidIndex(Index))
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Renderer index %d out of range (emitter has %d renderer(s))"), Index, Renderers.Num()));
+	}
+
+	UNiagaraRendererProperties* Renderer = Renderers[Index];
+	if (!Renderer)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Renderer at index %d is null"), Index));
+	}
+
+	// CLAUDE-NOTE: generic reflection set, mirroring HandleSetActorProperty. The renderer is
+	// a UObject so FindFProperty + ImportText_Direct work; e.g. set "Material" on a sprite/
+	// ribbon renderer to an asset path. PostEditChangeProperty + RequestEmitterRecompile so
+	// the change takes and any referencing system rebuilds.
+	FProperty* Prop = FindFProperty<FProperty>(Renderer->GetClass(), *PropertyName);
+	if (!Prop)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Property '%s' not found on renderer class '%s'."),
+			*PropertyName, *Renderer->GetClass()->GetName()));
+	}
+
+	Renderer->Modify();
+	void* PropAddr = Prop->ContainerPtrToValuePtr<void>(Renderer);
+	const TCHAR* ImportResult = Prop->ImportText_Direct(*PropertyValue, PropAddr, Renderer, 0);
+	if (!ImportResult)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Failed to set '%s' to '%s' — value incompatible with type '%s'"),
+			*PropertyName, *PropertyValue, *Prop->GetCPPType()));
+	}
+
+	FPropertyChangedEvent ChangedEvent(Prop);
+	Renderer->PostEditChangeProperty(ChangedEvent);
+	Emitter->MarkPackageDirty();
+	RequestEmitterRecompile(Emitter);
+	const bool bSaved = SaveGenericPackage(Emitter);
+
+	FString ExportedValue;
+	Prop->ExportTextItem_Direct(ExportedValue, PropAddr, nullptr, Renderer, PPF_None);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+	Result->SetNumberField(TEXT("index"), Index);
+	Result->SetStringField(TEXT("rendererClass"), Renderer->GetClass()->GetName());
+	Result->SetStringField(TEXT("property"), PropertyName);
+	Result->SetStringField(TEXT("value"), ExportedValue);
+	Result->SetBoolField(TEXT("saved"), bSaved);
 	return JsonToString(Result);
 }

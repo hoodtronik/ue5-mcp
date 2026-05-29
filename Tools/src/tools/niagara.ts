@@ -406,6 +406,29 @@ export function registerNiagaraTools(server: McpServer): void {
     }
   );
 
+  server.tool(
+    "set_renderer_property",
+    "Set a property on a renderer by index (from get_niagara_emitter_summary) via reflection. Most common use: set 'Material' on a Sprite/Ribbon renderer to an asset path so particles get the right look (glow/additive/etc). Value is UE import-text: an asset path like '/Game/FX/M_Glow.M_Glow' for object props, '1.0'/'true'/'(R=1,G=0,B=0,A=1)' for scalars/structs.",
+    {
+      emitter: z.string().describe("Emitter name or /Game/... path"),
+      index: z.number().int().describe("Renderer index (0-based) from get_niagara_emitter_summary"),
+      property: z.string().describe("Property name on the renderer class, e.g. 'Material'"),
+      value: z.string().describe("Value in UE import-text format (asset path for Material; '1.0'/'true'/struct text for others)"),
+    },
+    async ({ emitter, index, property, value }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-renderer-property", { emitter, index, property, value });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Set ${data.rendererClass}[${data.index}].${data.property} = ${data.value} on ${data.emitter || emitter}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
   // ---------------------------------------------------------------------------
   // Removal (Tier 2 CRUD counterparts)
   // ---------------------------------------------------------------------------
