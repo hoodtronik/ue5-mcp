@@ -1601,14 +1601,17 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 		// substitution — the linked parameter is read at the input's own type.
 		const FNiagaraVariableBase LinkedParam(InputType, FName(*LinkedName));
 		TSet<FNiagaraVariableBase> KnownParameters;
+		// CLAUDE-NOTE: SetLinkedParameterValueForFunctionInput does the essential work —
+		// it grafts a UNiagaraNodeParameterMapGet reading the linked parameter and wires
+		// its output to the input's override pin. That graph topology is what the compiler
+		// traces, so the value flows at runtime. The engine's stack code also calls
+		// GetScriptVariableIdForLinkedModuleParameter + UNiagaraNodeFunctionCall::UpdateInputNameBinding
+		// afterward to sync the module's bound-name bookkeeping, but BOTH of those are
+		// non-exported (no NIAGARAEDITOR_API/NIAGARA_API) → LNK2019 from this plugin. They are
+		// metadata-sync only (matters for rename propagation / stack UI), not for the binding
+		// to evaluate, so we omit them. The link works; it just won't auto-follow a later
+		// rename of the User Parameter.
 		FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(OverridePin, LinkedParam, KnownParameters);
-
-		const FGuid LinkedOutputId =
-			FNiagaraStackGraphUtilities::GetScriptVariableIdForLinkedModuleParameter(LinkedParam, *ModuleNode->GetNiagaraGraph());
-		if (LinkedOutputId.IsValid())
-		{
-			ModuleNode->UpdateInputNameBinding(LinkedOutputId, LinkedParam.GetName());
-		}
 
 		if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
 		{
