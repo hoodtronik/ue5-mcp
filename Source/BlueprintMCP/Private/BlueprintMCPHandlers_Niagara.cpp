@@ -1557,6 +1557,80 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 		return JsonToString(CurveResult);
 	}
 
+	// ---- linked-parameter mode -----------------------------------------------
+	// CLAUDE-NOTE: valueMode="link" binds the module input to READ FROM another
+	// Niagara parameter — typically a System User Parameter (User.*), which is how a
+	// scene Blueprint / RenderStream drives the value at runtime (the "controller
+	// drives many" pattern). Mirrors UNiagaraStackFunctionInput::SetLinkedParameterValue:
+	// graft a ParameterMapGet for the linked var onto the input's override pin, then
+	// rebind the module node's input name to the linked script-variable id.
+	// SetLinkedParameterValueForFunctionInput checkf-asserts the override pin is
+	// unlinked, so switching FROM a curve/dynamic override via MCP isn't supported —
+	// we return a clean error rather than tripping the assert. (A prior CONSTANT
+	// override only sets the pin DefaultValue, not LinkedTo, so linking over a
+	// constant is fine — the link takes precedence.)
+	if (ValueMode.Equals(TEXT("link"), ESearchCase::IgnoreCase))
+	{
+		FString LinkedName;
+		if (!Json->TryGetStringField(TEXT("linkedParameter"), LinkedName) || LinkedName.IsEmpty())
+		{
+			return MakeErrorJson(TEXT("valueMode='link' requires 'linkedParameter' (e.g. 'User.RiseSpeed')"));
+		}
+		// Auto-prefix bare names to the User namespace, matching add_user_parameter.
+		if (!LinkedName.Contains(TEXT(".")))
+		{
+			LinkedName = FString::Printf(TEXT("User.%s"), *LinkedName);
+		}
+
+		const FNiagaraParameterHandle InputHandle = FNiagaraParameterHandle::CreateModuleParameterHandle(FName(*InputName));
+		const FNiagaraParameterHandle AliasedHandle =
+			FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(InputHandle, ModuleNode);
+
+		Emitter->Modify();
+		Graph->Modify();
+
+		UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			*ModuleNode, AliasedHandle, InputType, FGuid(), FGuid());
+
+		if (OverridePin.LinkedTo.Num() > 0)
+		{
+			return MakeErrorJson(TEXT("This input already has a linked/curve override. Clear it in the Niagara editor before binding it to a parameter (switching override types via MCP is not yet supported)."));
+		}
+
+		// Exact-typed link: empty KnownParameters means no static/position alternate
+		// substitution — the linked parameter is read at the input's own type.
+		const FNiagaraVariableBase LinkedParam(InputType, FName(*LinkedName));
+		TSet<FNiagaraVariableBase> KnownParameters;
+		FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(OverridePin, LinkedParam, KnownParameters);
+
+		const FGuid LinkedOutputId =
+			FNiagaraStackGraphUtilities::GetScriptVariableIdForLinkedModuleParameter(LinkedParam, *ModuleNode->GetNiagaraGraph());
+		if (LinkedOutputId.IsValid())
+		{
+			ModuleNode->UpdateInputNameBinding(LinkedOutputId, LinkedParam.GetName());
+		}
+
+		if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+		{
+			OwningNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_module_input link"), true);
+		}
+		ModuleNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_module_input link"), true);
+
+		Emitter->MarkPackageDirty();
+		RequestEmitterRecompile(Emitter);
+		const bool bSaved = SaveGenericPackage(Emitter);
+
+		TSharedRef<FJsonObject> LinkResult = MakeShared<FJsonObject>();
+		LinkResult->SetStringField(TEXT("emitter"), Emitter->GetPathName());
+		LinkResult->SetStringField(TEXT("moduleName"), ModuleNode->GetFunctionName());
+		LinkResult->SetStringField(TEXT("input"), InputName);
+		LinkResult->SetStringField(TEXT("type"), InputType.GetName());
+		LinkResult->SetStringField(TEXT("valueMode"), TEXT("link"));
+		LinkResult->SetStringField(TEXT("linkedParameter"), LinkedName);
+		LinkResult->SetBoolField(TEXT("saved"), bSaved);
+		return JsonToString(LinkResult);
+	}
+
 	// Build the value first so we can fail fast on a shape mismatch.
 	FNiagaraVariable ValueVar(InputType, NAME_None);
 	FString ApplyError;

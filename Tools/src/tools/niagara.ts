@@ -323,19 +323,20 @@ export function registerNiagaraTools(server: McpServer): void {
 
   server.tool(
     "set_module_input",
-    "Set a module input to either an inline CONSTANT (valueMode='constant', default) or a CURVE over life (valueMode='curve'). Target the module by its node GUID from add_niagara_module/list_emitter_modules. Constant supports float/int/bool/vec2/vec3/vec4/color; curve supports float/vec2/vec3/vec4/color (grafts a *FromCurve dynamic input — size/color/velocity over life). Re-calling with the same curve input updates its keys in place (idempotent for the iterate loop).",
+    "Set a module input to an inline CONSTANT (valueMode='constant', default), a CURVE over life (valueMode='curve'), or a LINK to another Niagara parameter (valueMode='link'). Target the module by its node GUID from add_niagara_module/list_emitter_modules. Constant supports float/int/bool/vec2/vec3/vec4/color; curve supports float/vec2/vec3/vec4/color (grafts a *FromCurve dynamic input — size/color/velocity over life). Link binds the input to read from a parameter — typically a System User Parameter (User.*) — so a scene Blueprint / RenderStream drives the value at runtime; pass linkedParameter (bare names are auto-prefixed 'User.'), and the User Parameter must already exist (add_user_parameter) with the SAME type as the input. Re-calling with the same curve input updates its keys in place (idempotent for the iterate loop).",
     {
       emitter: z.string().describe("Emitter name or /Game/... path"),
       stage: z.enum(STAGES).describe("Stack stage the module lives on"),
       moduleNodeGuid: z.string().describe("Module node GUID returned by add_niagara_module"),
       input: z.string().describe("Module input name, e.g. 'SpawnRate'"),
       type: z.enum(["float", "int", "bool", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
-      valueMode: z.enum(["constant", "curve"]).default("constant").describe("'constant' (inline literal) or 'curve' (value over life via a *FromCurve dynamic input)"),
+      valueMode: z.enum(["constant", "curve", "link"]).default("constant").describe("'constant' (inline literal), 'curve' (value over life via a *FromCurve dynamic input), or 'link' (read from another parameter, e.g. a User Parameter)"),
       value: valueSchema.optional().describe("constant mode: number for scalars, boolean for bool, [x,y,...] array for vectors/color"),
       curveKeys: z.array(curveKeySchema).optional().describe("curve mode: keys [{time, value:[...]}] sorted by time. value length must match type (float=1, vec2=2, vec3=3, vec4=4, color=4 as r,g,b,a). For over-life curves, time is Normalized Age 0..1."),
       curveInterp: z.enum(["cubic", "linear", "constant"]).default("cubic").describe("curve mode: key interpolation. cubic = smooth auto-tangents (organic default)."),
+      linkedParameter: z.string().optional().describe("link mode: parameter to read from, e.g. 'User.RiseSpeed'. A bare name is auto-prefixed with 'User.'. Must already exist and match the input type. The override pin must be empty (can't link over an existing curve/dynamic override)."),
     },
-    async ({ emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp }) => {
+    async ({ emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp, linkedParameter }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
@@ -345,14 +346,19 @@ export function registerNiagaraTools(server: McpServer): void {
       if (valueMode === "constant" && value === undefined) {
         return { content: [{ type: "text" as const, text: "Error: valueMode='constant' requires a value." }] };
       }
+      if (valueMode === "link" && (!linkedParameter || linkedParameter.length === 0)) {
+        return { content: [{ type: "text" as const, text: "Error: valueMode='link' requires a linkedParameter (e.g. 'User.RiseSpeed')." }] };
+      }
 
-      const data = await uePost("/api/set-module-input", { emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp });
+      const data = await uePost("/api/set-module-input", { emitter, stage, moduleNodeGuid, input, type, valueMode, value, curveKeys, curveInterp, linkedParameter });
       if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
 
       const lines: string[] = [];
       if (data.valueMode === "curve") {
         lines.push(`Set ${data.moduleName}.${data.input} = curve (${data.type}), ${data.keyCount} key(s), interp=${curveInterp}`);
         if (data.reusedExistingCurve) lines.push(`Updated existing curve in place (no new node).`);
+      } else if (data.valueMode === "link") {
+        lines.push(`Linked ${data.moduleName}.${data.input} (${data.type}) -> ${data.linkedParameter}`);
       } else {
         lines.push(`Set ${data.moduleName}.${data.input} = ${JSON.stringify(value)} (${data.type})`);
         if (data.pinDefaultValue) lines.push(`Pin default: ${data.pinDefaultValue}`);
