@@ -369,6 +369,32 @@ export function registerNiagaraTools(server: McpServer): void {
   );
 
   server.tool(
+    "set_system_module_input",
+    "Set a CONSTANT on a SYSTEM-stage module (System Spawn / System Update), which set_module_input (emitter-scoped) cannot reach. Identify the module by name (e.g. 'System State'). Main use: fix 'System State' > 'Loop Duration' on a system built from the empty-system factory — it defaults to 0, which freezes the system clock so no particles ever run (set it to e.g. 5). Constant values only (no curve/link).",
+    {
+      system: z.string().describe("System name or /Game/... path"),
+      stage: z.enum(["SystemSpawn", "SystemUpdate"]).describe("System script stage the module lives on (System State is on SystemUpdate)"),
+      module: z.string().describe("Module name, e.g. 'System State' (spaces/case-insensitive)"),
+      input: z.string().describe("Module input name, e.g. 'Loop Duration'"),
+      type: z.enum(["float", "int", "bool", "vec2", "vec3", "vec4", "color"]).describe("Niagara type of the input"),
+      value: valueSchema.describe("number for scalars, boolean for bool, [x,y,...] array for vectors/color"),
+    },
+    async ({ system, stage, module, input, type, value }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-system-module-input", { system, stage, module, input, type, value });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(`Set ${data.module}.${data.input} = ${JSON.stringify(value)} (${data.type}) on ${data.stage}`);
+      if (data.pinDefaultValue) lines.push(`Pin default: ${data.pinDefaultValue}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
     "add_user_parameter",
     "Add a User Parameter to a UNiagaraSystem (the uds_* values exposed to RenderStream/Blueprint). Name is auto-prefixed with 'User.' if omitted.",
     {

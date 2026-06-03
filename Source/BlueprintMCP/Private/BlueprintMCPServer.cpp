@@ -962,6 +962,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("addNiagaraRenderer")));
 	Router->BindRoute(FHttpPath(TEXT("/api/set-module-input")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("setModuleInput")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-system-module-input")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setSystemModuleInput")));
 	Router->BindRoute(FHttpPath(TEXT("/api/add-user-parameter")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("addUserParameter")));
 	Router->BindRoute(FHttpPath(TEXT("/api/set-user-parameter-default")), EHttpServerRequestVerbs::VERB_POST,
@@ -1391,6 +1393,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("addNiagaraModule"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraModule(B); });
 	HandlerMap.Add(TEXT("addNiagaraRenderer"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraRenderer(B); });
 	HandlerMap.Add(TEXT("setModuleInput"),             [this](const TMap<FString, FString>&, const FString& B) { return HandleSetModuleInput(B); });
+	HandlerMap.Add(TEXT("setSystemModuleInput"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleSetSystemModuleInput(B); });
 	HandlerMap.Add(TEXT("addUserParameter"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddUserParameter(B); });
 	HandlerMap.Add(TEXT("setUserParameterDefault"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleSetUserParameterDefault(B); });
 	HandlerMap.Add(TEXT("listModuleLibrary"),          [this](const TMap<FString, FString>& P, const FString&) { return HandleListModuleLibrary(P); });

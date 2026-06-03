@@ -287,6 +287,7 @@ private:
 	FString HandleAddNiagaraModule(const FString& Body);
 	FString HandleAddNiagaraRenderer(const FString& Body);
 	FString HandleSetModuleInput(const FString& Body);
+	FString HandleSetSystemModuleInput(const FString& Body);
 	FString HandleAddUserParameter(const FString& Body);
 	FString HandleSetUserParameterDefault(const FString& Body);
 	FString HandleListModuleLibrary(const TMap<FString, FString>& Params);

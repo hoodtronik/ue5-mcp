@@ -1684,6 +1684,180 @@ FString FBlueprintMCPServer::HandleSetModuleInput(const FString& Body)
 }
 
 // ============================================================
+// HandleSetSystemModuleInput — set a constant on a SYSTEM-stage module
+// ============================================================
+// CLAUDE-NOTE: System Spawn/Update scripts live on the UNiagaraSystem, not on any emitter,
+// so set_module_input (emitter-scoped) can't reach them. This sets a CONSTANT on a system-
+// stage module identified by NAME (e.g. "System State") — the fix for System State > Loop
+// Duration, which the empty-system factory seeds at 0 (system clock never advances). Both
+// system scripts share one source graph; we find the stage's output node, walk its module
+// chain, match the function name, then reuse the same override-pin write set_module_input
+// uses. Constant only (curve/link not needed for system lifecycle settings).
+FString FBlueprintMCPServer::HandleSetSystemModuleInput(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid()) { return MakeErrorJson(TEXT("Invalid JSON body")); }
+
+	FString SystemNameOrPath, Stage, ModuleName, InputName, TypeStr;
+	if (!Json->TryGetStringField(TEXT("system"), SystemNameOrPath) || SystemNameOrPath.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: system"));
+	}
+	if (!Json->TryGetStringField(TEXT("stage"), Stage) || Stage.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: stage (SystemSpawn|SystemUpdate)"));
+	}
+	if (!Json->TryGetStringField(TEXT("module"), ModuleName) || ModuleName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: module (module name, e.g. 'System State')"));
+	}
+	if (!Json->TryGetStringField(TEXT("input"), InputName) || InputName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: input (e.g. 'Loop Duration')"));
+	}
+	if (!Json->TryGetStringField(TEXT("type"), TypeStr) || TypeStr.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required field: type (float|int|bool|vec2|vec3|vec4|color)"));
+	}
+
+	ENiagaraScriptUsage Usage;
+	if (Stage.Equals(TEXT("SystemSpawn"), ESearchCase::IgnoreCase))       { Usage = ENiagaraScriptUsage::SystemSpawnScript; }
+	else if (Stage.Equals(TEXT("SystemUpdate"), ESearchCase::IgnoreCase)) { Usage = ENiagaraScriptUsage::SystemUpdateScript; }
+	else { return MakeErrorJson(TEXT("stage must be 'SystemSpawn' or 'SystemUpdate'")); }
+
+	FNiagaraTypeDefinition InputType;
+	if (!ResolveNiagaraType(TypeStr, InputType))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Unsupported type '%s'"), *TypeStr));
+	}
+
+	UNiagaraSystem* System = FindNiagaraSystemByNameOrPath(SystemNameOrPath);
+	if (!System)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("NiagaraSystem '%s' not found"), *SystemNameOrPath));
+	}
+
+	// Both system scripts share one source graph; the spawn script's source is fine for either stage.
+	UNiagaraScript* SysScript = System->GetSystemSpawnScript();
+	UNiagaraScriptSource* Source = SysScript ? Cast<UNiagaraScriptSource>(SysScript->GetLatestSource()) : nullptr;
+	UNiagaraGraph* Graph = Source ? Source->NodeGraph : nullptr;
+	if (!Graph)
+	{
+		return MakeErrorJson(TEXT("Could not resolve the system script graph"));
+	}
+
+	UNiagaraNodeOutput* OutputNode = FindStageOutputNode(Graph, Usage);
+	if (!OutputNode)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("No %s output node in the system graph"), *Stage));
+	}
+
+	TArray<UNiagaraNodeFunctionCall*> Modules;
+	GetOrderedStageModules(OutputNode, Modules);
+
+	UNiagaraNodeFunctionCall* ModuleNode = nullptr;
+	TArray<FString> Available;
+	for (UNiagaraNodeFunctionCall* M : Modules)
+	{
+		if (!M) { continue; }
+		const FString Fn = M->GetFunctionName();
+		Available.Add(Fn);
+		// Match exact or relaxed (ignore spaces/case): "System State" vs "SystemState".
+		const FString FnCompact = Fn.Replace(TEXT(" "), TEXT(""));
+		const FString WantCompact = ModuleName.Replace(TEXT(" "), TEXT(""));
+		if (Fn.Equals(ModuleName, ESearchCase::IgnoreCase) || FnCompact.Equals(WantCompact, ESearchCase::IgnoreCase))
+		{
+			ModuleNode = M;
+			break;
+		}
+	}
+	if (!ModuleNode)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("No module '%s' on system %s. Available: %s"),
+			*ModuleName, *Stage, *FString::Join(Available, TEXT(", "))));
+	}
+
+	// Validate the input exists on this module and the type matches (snap to exact spelling/case).
+	{
+		TArray<FNiagaraVariable> ModuleInputs;
+		FCompileConstantResolver Resolver;
+		FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+			*ModuleNode, ModuleInputs, Resolver,
+			FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly,
+			/*bIgnoreDisabled*/ false);
+
+		const FNiagaraVariable* MatchedInput = nullptr;
+		for (const FNiagaraVariable& Var : ModuleInputs)
+		{
+			FString BareName = Var.GetName().ToString();
+			if (BareName.StartsWith(TEXT("Module."))) { BareName = BareName.RightChop(7); }
+			if (BareName.Equals(InputName, ESearchCase::IgnoreCase))
+			{
+				MatchedInput = &Var;
+				InputName = BareName;
+				break;
+			}
+		}
+		if (!MatchedInput)
+		{
+			return MakeErrorJson(FString::Printf(
+				TEXT("Input '%s' not found on module '%s'."), *InputName, *ModuleNode->GetFunctionName()));
+		}
+		if (MatchedInput->GetType() != InputType)
+		{
+			return MakeErrorJson(FString::Printf(
+				TEXT("Input '%s' on '%s' is type '%s', not '%s'."),
+				*InputName, *ModuleNode->GetFunctionName(), *MatchedInput->GetType().GetName(), *InputType.GetName()));
+		}
+	}
+
+	FNiagaraVariable ValueVar(InputType, NAME_None);
+	FString ApplyError;
+	if (!ApplyJsonValueToNiagaraVar(ValueVar, Json.ToSharedRef(), ApplyError))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Failed to apply value: %s"), *ApplyError));
+	}
+
+	const FNiagaraParameterHandle InputHandle = FNiagaraParameterHandle::CreateModuleParameterHandle(FName(*InputName));
+	const FNiagaraParameterHandle AliasedHandle =
+		FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(InputHandle, ModuleNode);
+
+	System->Modify();
+	Graph->Modify();
+
+	UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+		*ModuleNode, AliasedHandle, InputType, FGuid(), FGuid());
+
+	FString PinDefaultValue;
+	const UEdGraphSchema_Niagara* NiagaraSchema = GetDefault<UEdGraphSchema_Niagara>();
+	if (!NiagaraSchema->TryGetPinDefaultValueFromNiagaraVariable(ValueVar, PinDefaultValue))
+	{
+		return MakeErrorJson(TEXT("Could not serialize value to a pin default for this type"));
+	}
+
+	OverridePin.Modify();
+	OverridePin.DefaultValue = PinDefaultValue;
+	if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+	{
+		OwningNode->MarkNodeRequiresSynchronization(TEXT("BlueprintMCP set_system_module_input"), true);
+	}
+
+	System->MarkPackageDirty();
+	System->RequestCompile(false);
+	const bool bSaved = SaveGenericPackage(System);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("system"), System->GetPathName());
+	Result->SetStringField(TEXT("stage"), Stage);
+	Result->SetStringField(TEXT("module"), ModuleNode->GetFunctionName());
+	Result->SetStringField(TEXT("input"), InputName);
+	Result->SetStringField(TEXT("type"), InputType.GetName());
+	Result->SetStringField(TEXT("pinDefaultValue"), PinDefaultValue);
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
 // HandleListModuleLibrary — list module scripts valid for a stage
 // ============================================================
 
