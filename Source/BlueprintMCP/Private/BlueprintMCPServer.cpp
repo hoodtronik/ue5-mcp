@@ -1640,6 +1640,15 @@ TSharedRef<FJsonObject> FBlueprintMCPServer::SerializeBlueprint(UBlueprint* BP)
 		VJ->SetBoolField(TEXT("isMap"), V.VarType.IsMap());
 		VJ->SetStringField(TEXT("category"), V.Category.ToString());
 		VJ->SetStringField(TEXT("defaultValue"), V.DefaultValue);
+		// CLAUDE-NOTE: Emit exposure flags from PropertyFlags so consumers can tell which
+		// variables are surfaced to external systems (e.g. disguise/RenderStream reads
+		// "Instance Editable" public properties). Mirrors the bit logic in HandleSetVariableMetadata.
+		// "Instance Editable" in the BP editor == CPF_Edit set AND CPF_DisableEditOnInstance clear.
+		const uint64 PropFlags = V.PropertyFlags;
+		VJ->SetBoolField(TEXT("instanceEditable"),
+			(PropFlags & CPF_Edit) != 0 && (PropFlags & CPF_DisableEditOnInstance) == 0);
+		VJ->SetBoolField(TEXT("exposeOnSpawn"), (PropFlags & CPF_ExposeOnSpawn) != 0);
+		VJ->SetBoolField(TEXT("blueprintReadOnly"), (PropFlags & CPF_BlueprintReadOnly) != 0);
 		Vars.Add(MakeShared<FJsonValueObject>(VJ));
 	}
 	J->SetArrayField(TEXT("variables"), Vars);
