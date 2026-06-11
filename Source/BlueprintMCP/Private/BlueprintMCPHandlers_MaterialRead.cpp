@@ -932,7 +932,9 @@ FString FBlueprintMCPServer::HandleValidateMaterial(const FString& Body)
 	bool bValid = true;
 
 	// Check for compilation errors via FMaterialResource on current platform
-	FMaterialResource* Resource = Material->GetMaterialResource(GMaxRHIShaderPlatform);
+	// CLAUDE-NOTE: UE5.6 changed UMaterial::GetMaterialResource to take ERHIFeatureLevel::Type
+	// (was EShaderPlatform in <=5.5). Pass GMaxRHIFeatureLevel so the plugin builds on 5.6.
+	FMaterialResource* Resource = Material->GetMaterialResource(GMaxRHIFeatureLevel);
 	if (Resource)
 	{
 		const TArray<FString>& CompileErrors = Resource->GetCompileErrors();
