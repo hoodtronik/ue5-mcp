@@ -22,6 +22,7 @@ import { registerMaterialMutationTools } from "./tools/material-mutation.js";
 import { registerAnimationTools } from "./tools/animation-mutation.js";
 import { registerGroomTools } from "./tools/groom.js";
 import { registerScreenshotTools } from "./tools/screenshot.js";
+import { registerRunPythonTools } from "./tools/run-python.js";
 
 // Resource registrations
 import { registerBlueprintListResource } from "./resources/blueprint-list.js";
@@ -52,6 +53,7 @@ registerMaterialMutationTools(server);
 registerAnimationTools(server);
 registerGroomTools(server);
 registerScreenshotTools(server);
+registerRunPythonTools(server);
 
 // Register resources
 registerBlueprintListResource(server);
