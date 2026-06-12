@@ -277,6 +277,9 @@ private:
 	// ----- Console command execution -----
 	FString HandleExecCommand(const FString& Body);
 
+	// ----- Python execution bridge -----
+	FString HandleRunPython(const FString& Body);
+
 	// ----- Groom Binding asset handlers -----
 	FString HandleListGroomBindings(const TMap<FString, FString>& Params);
 	FString HandleDuplicateGroomBinding(const FString& Body);
