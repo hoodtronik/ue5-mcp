@@ -35,7 +35,13 @@ public class BlueprintMCP : ModuleRules
 			"UMG",
 			"UMGEditor",
 			"SlateCore",
-			"HairStrandsCore"
+			"HairStrandsCore",
+			// CLAUDE-NOTE: added for the Voxel Sandbox -> StaticMesh baker (BlueprintMCPVoxelBaker.cpp).
+			"ProceduralMeshComponent",
+			"MeshDescription",
+			"StaticMeshDescription",
+			// CLAUDE-NOTE: added for the run_python bridge (BlueprintMCPHandlers_Python.cpp).
+			"PythonScriptPlugin"
 		});
 	}
 }

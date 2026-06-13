@@ -819,6 +819,11 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/exec")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("exec")));
 
+	// CLAUDE-NOTE: Python execution bridge — runs arbitrary UE Editor Python (full reflected API,
+	// incl. PCG) and returns captured output. Enables scripting features that have no dedicated tool.
+	Router->BindRoute(FHttpPath(TEXT("/api/run-python")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("runPython")));
+
 	// Viewport screenshots
 	Router->BindRoute(FHttpPath(TEXT("/api/take-screenshot")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("takeScreenshot")));
@@ -1116,6 +1121,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 
 	// Console command execution
 	HandlerMap.Add(TEXT("exec"),                    [this](const TMap<FString, FString>&, const FString& B) { return HandleExecCommand(B); });
+	HandlerMap.Add(TEXT("runPython"),               [this](const TMap<FString, FString>&, const FString& B) { return HandleRunPython(B); });
 
 	// Viewport screenshots
 	HandlerMap.Add(TEXT("takeScreenshot"),          [this](const TMap<FString, FString>&, const FString& B) { return HandleTakeScreenshot(B); });
