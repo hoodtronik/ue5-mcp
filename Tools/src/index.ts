@@ -41,6 +41,7 @@ import { registerRunPythonTools } from "./tools/run-python.js";
 // CLAUDE-NOTE: merged back — Groom is this repo's own toolset (has C++ backing); the global server
 // sync didn't include it. Keep it alongside Niagara so no tools are lost.
 import { registerGroomTools } from "./tools/groom.js";
+import { registerPcgTools } from "./tools/pcg.js";
 
 import { registerBlueprintListResource } from "./resources/blueprint-list.js";
 import { registerWorkflowRecipesResource } from "./resources/workflow-recipes.js";
@@ -84,6 +85,7 @@ registerLevelTools(server);
 registerNiagaraTools(server);
 registerRunPythonTools(server);
 registerGroomTools(server);
+registerPcgTools(server);
 
 registerBlueprintListResource(server);
 registerWorkflowRecipesResource(server);
