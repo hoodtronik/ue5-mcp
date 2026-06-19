@@ -45,6 +45,7 @@ import { registerPcgTools } from "./tools/pcg.js";
 
 import { registerBlueprintListResource } from "./resources/blueprint-list.js";
 import { registerWorkflowRecipesResource } from "./resources/workflow-recipes.js";
+import { registerSkills } from "./skills/index.js";
 
 const server = new McpServer({ name: "blueprint-mcp", version: "1.0.0" });
 
@@ -89,6 +90,7 @@ registerPcgTools(server);
 
 registerBlueprintListResource(server);
 registerWorkflowRecipesResource(server);
+registerSkills(server);
 
 process.on("exit", () => { if (!state.editorMode) state.ueProcess?.kill(); });
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
