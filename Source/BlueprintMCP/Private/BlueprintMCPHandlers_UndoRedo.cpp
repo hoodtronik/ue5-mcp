@@ -1,6 +1,7 @@
 #include "BlueprintMCPServer.h"
 #include "Editor.h"
 #include "Editor/TransBuffer.h"
+#include "UObject/GarbageCollection.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonWriter.h"
@@ -176,5 +177,49 @@ FString FBlueprintMCPServer::HandleEndTransaction(const FString& Body)
 	Result->SetBoolField(TEXT("success"), true);
 	Result->SetNumberField(TEXT("transactionIndex"), TransactionIndex);
 
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleResetTransactionBuffer — clear the editor undo/redo buffer.
+// The transaction buffer holds hard references to every object it
+// has recorded, which pins recently-touched assets so they cannot be
+// deleted or GC'd (delete_asset returns false) until an editor
+// restart. Resetting it + a GC frees them without a restart.
+// Destroys undo history — that is the intended cost.
+// ============================================================
+
+FString FBlueprintMCPServer::HandleResetTransactionBuffer(const FString& Body)
+{
+	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: reset_transaction_buffer()"));
+
+	if (!bIsEditor)
+	{
+		return MakeErrorJson(TEXT("reset_transaction_buffer requires editor mode."));
+	}
+
+	if (!GEditor)
+	{
+		return MakeErrorJson(TEXT("Editor not available."));
+	}
+
+	UTransBuffer* TransBuffer = Cast<UTransBuffer>(GEditor->Trans);
+	if (!TransBuffer)
+	{
+		return MakeErrorJson(TEXT("Transaction buffer not available."));
+	}
+
+	const int32 ClearedUndo = AvailableUndoCount(TransBuffer);
+	const int32 ClearedRedo = AvailableRedoCount(TransBuffer);
+
+	TransBuffer->Reset(NSLOCTEXT("BlueprintMCP", "ResetTransBuffer", "BlueprintMCP: reset transaction buffer"));
+
+	// Collect the objects the buffer was pinning so freed assets become deletable now.
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetNumberField(TEXT("clearedUndo"), ClearedUndo);
+	Result->SetNumberField(TEXT("clearedRedo"), ClearedRedo);
 	return JsonToString(Result);
 }

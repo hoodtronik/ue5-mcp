@@ -1407,6 +1407,83 @@ FString FBlueprintMCPServer::HandleSetExpressionValue(const FString& Body)
 }
 
 // ============================================================
+// HandleSetMaterialScalarDefault — set a base Material's scalar
+// parameter DEFAULT value, located by parameter name.
+// Python reflection can't do this: UMaterial::Expressions is a
+// protected property, and MaterialEditingLibrary only exposes
+// *instance* setters plus a base *getter*. C++ has direct access
+// to the expression list via UMaterial::GetExpressions().
+// ============================================================
+
+FString FBlueprintMCPServer::HandleSetMaterialScalarDefault(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString MaterialName = Json->GetStringField(TEXT("material"));
+	FString ParameterName = Json->GetStringField(TEXT("parameterName"));
+	if (MaterialName.IsEmpty() || ParameterName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required fields: material, parameterName"));
+	}
+	if (!Json->HasField(TEXT("value")))
+	{
+		return MakeErrorJson(TEXT("Missing required field: value"));
+	}
+	const float NewValue = (float)Json->GetNumberField(TEXT("value"));
+
+	FString LoadError;
+	UMaterial* Material = LoadMaterialByName(MaterialName, LoadError);
+	if (!Material)
+	{
+		return MakeErrorJson(LoadError);
+	}
+
+	// Locate the scalar parameter expression by name. GetExpressions() is the
+	// public accessor (the Expressions array itself is protected).
+	UMaterialExpressionScalarParameter* Target = nullptr;
+	for (UMaterialExpression* Expr : Material->GetExpressions())
+	{
+		UMaterialExpressionScalarParameter* SP = Cast<UMaterialExpressionScalarParameter>(Expr);
+		if (SP && SP->ParameterName == FName(*ParameterName))
+		{
+			Target = SP;
+			break;
+		}
+	}
+
+	if (!Target)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Scalar parameter '%s' not found in material '%s'"), *ParameterName, *Material->GetName()));
+	}
+
+	const float OldValue = Target->DefaultValue;
+
+	Material->PreEditChange(nullptr);
+	Target->DefaultValue = NewValue;
+	Material->PostEditChange();
+	Material->MarkPackageDirty();
+
+	const bool bSaved = SaveMaterialPackage(Material);
+
+	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: Set scalar default '%s' on '%s': %f -> %f"),
+		*ParameterName, *Material->GetName(), OldValue, NewValue);
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("material"), Material->GetName());
+	Result->SetStringField(TEXT("parameterName"), ParameterName);
+	Result->SetNumberField(TEXT("oldValue"), OldValue);
+	Result->SetNumberField(TEXT("newValue"), NewValue);
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
 // HandleMoveMaterialExpression — reposition a material graph node
 // ============================================================
 

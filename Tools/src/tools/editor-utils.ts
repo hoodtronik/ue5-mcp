@@ -102,4 +102,23 @@ export function registerEditorUtilityTools(server: McpServer): void {
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );
+
+  server.tool(
+    "reset_transaction_buffer",
+    "Clear the editor's undo/redo transaction buffer, then run garbage collection. The transaction buffer pins hard references to every object it records, which can keep recently-touched assets from being deleted or GC'd (delete_asset returns false) until an editor restart — this frees them without one. WARNING: destroys all undo history. Requires editor mode.",
+    {},
+    async () => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/reset-transaction-buffer", {});
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines = [
+        `Transaction buffer reset (cleared ${data.clearedUndo} undo / ${data.clearedRedo} redo entries) and GC run.`,
+        `Undo history is now empty; previously undo-pinned assets can now be deleted.`,
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
 }
