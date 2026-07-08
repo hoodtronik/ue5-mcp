@@ -42,6 +42,7 @@ import { registerRunPythonTools } from "./tools/run-python.js";
 // sync didn't include it. Keep it alongside Niagara so no tools are lost.
 import { registerGroomTools } from "./tools/groom.js";
 import { registerPcgTools } from "./tools/pcg.js";
+import { registerPcgAuthoringTools } from "./tools/pcg-authoring.js";
 
 import { registerBlueprintListResource } from "./resources/blueprint-list.js";
 import { registerWorkflowRecipesResource } from "./resources/workflow-recipes.js";
@@ -89,6 +90,7 @@ registerNiagaraTools(server);
 registerRunPythonTools(server);
 registerGroomTools(server);
 registerPcgTools(server);
+registerPcgAuthoringTools(server);
 
 registerBlueprintListResource(server);
 registerWorkflowRecipesResource(server);
