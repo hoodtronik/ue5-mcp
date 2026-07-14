@@ -4,6 +4,7 @@ import { pcgSkill } from "./pcg.js";
 import { blueprintsSkill } from "./blueprints.js";
 import { levelsSkill } from "./levels.js";
 import { materialsSkill } from "./materials.js";
+import { animEditingSkill } from "./anim-editing.js";
 import { skySkill } from "./sky.js";
 
 // CLAUDE-NOTE: Skills system. Each skill is exposed as an MCP Resource at
@@ -12,7 +13,7 @@ import { skySkill } from "./sky.js";
 // agent can discover skills (list_skills tool or resources/list) and pull a skill's full
 // instructions on demand (resources/read). Pure transport-layer — UE 5.6 safe.
 
-export const SKILLS: Skill[] = [pcgSkill, blueprintsSkill, levelsSkill, materialsSkill, skySkill];
+export const SKILLS: Skill[] = [pcgSkill, blueprintsSkill, levelsSkill, materialsSkill, animEditingSkill, skySkill];
 
 const SKILL_URI = (name: string) => `skill://unreal/${name}`;
 
