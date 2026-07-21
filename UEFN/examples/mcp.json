@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "blueprint-mcp-uefn": {
+      "command": "node",
+      "args": ["Tools/dist/index.js"],
+      "env": {
+        "MCP_BACKEND": "uefn",
+        "UEFN_MCP_PORT": "8765",
+        "UEFN_MCP_TOKEN_FILE": "~/.uefn-mcp/token"
+      }
+    }
+  }
+}
