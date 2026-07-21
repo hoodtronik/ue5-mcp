@@ -13,3 +13,12 @@ Thumbs.db
 .vscode/
 *.suo
 *.user
+
+# UEFN listener local state / auth tokens (never commit)
+UEFN/**/.mcp_token
+UEFN/**/*.local.token
+UEFN/**/listener_state.json
+**/uefn_mcp_token*
+*.uefn.local.json
+UEFN/**/__pycache__/
+UEFN/**/*.pyc
