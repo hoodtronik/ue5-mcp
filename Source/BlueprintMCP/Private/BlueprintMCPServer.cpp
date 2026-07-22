@@ -626,6 +626,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("validateAllBlueprints")));
 	Router->BindRoute(FHttpPath(TEXT("/api/add-node")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("addNode")));
+	Router->BindRoute(FHttpPath(TEXT("/api/build-graph")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("buildGraph")));
 	Router->BindRoute(FHttpPath(TEXT("/api/rename-asset")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("renameAsset")));
 	Router->BindRoute(FHttpPath(TEXT("/api/reparent-blueprint")), EHttpServerRequestVerbs::VERB_POST,
@@ -1039,6 +1041,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("validateBlueprint"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleValidateBlueprint(B); });
 	HandlerMap.Add(TEXT("validateAllBlueprints"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleValidateAllBlueprints(B); });
 	HandlerMap.Add(TEXT("addNode"),                 [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNode(B); });
+	HandlerMap.Add(TEXT("buildGraph"),              [this](const TMap<FString, FString>&, const FString& B) { return HandleBuildGraph(B); });
 	HandlerMap.Add(TEXT("renameAsset"),             [this](const TMap<FString, FString>&, const FString& B) { return HandleRenameAsset(B); });
 	HandlerMap.Add(TEXT("reparentBlueprint"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleReparentBlueprint(B); });
 	HandlerMap.Add(TEXT("setBlueprintDefault"),     [this](const TMap<FString, FString>&, const FString& B) { return HandleSetBlueprintDefault(B); });

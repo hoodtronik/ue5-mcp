@@ -1910,12 +1910,17 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 	// Mark as modified
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 
-	// Save
-	bool bSaved = SaveBlueprintPackage(BP);
+	// CLAUDE-NOTE: SaveBlueprintPackage compiles the Blueprint and writes the .uasset, so paying
+	// it once per node is by far the dominant cost of authoring a multi-node graph. `deferSave`
+	// lets a batch caller (HandleBuildGraph) suppress it and save exactly once at the end; the
+	// batch then owns the save. Absent/false preserves the original per-call behaviour for the
+	// standalone add_node tool, so this is additive only.
+	const bool bDeferSave = Json->HasField(TEXT("deferSave")) && Json->GetBoolField(TEXT("deferSave"));
+	bool bSaved = bDeferSave ? false : SaveBlueprintPackage(BP);
 
 	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: Added %s node '%s' in graph '%s' of '%s', save %s"),
 		*NodeType, *NewNode->NodeGuid.ToString(), *DecodedGraphName, *BlueprintName,
-		bSaved ? TEXT("succeeded") : TEXT("failed"));
+		bDeferSave ? TEXT("deferred") : (bSaved ? TEXT("succeeded") : TEXT("failed")));
 
 	// Serialize the new node (includes GUID and pin list)
 	TSharedPtr<FJsonObject> NodeState = SerializeNode(NewNode);
@@ -1927,6 +1932,10 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 	Result->SetStringField(TEXT("nodeType"), NodeType);
 	Result->SetStringField(TEXT("nodeId"), NewNode->NodeGuid.ToString());
 	Result->SetBoolField(TEXT("saved"), bSaved);
+	if (bDeferSave)
+	{
+		Result->SetBoolField(TEXT("saveDeferred"), true);
+	}
 	if (NodeState.IsValid())
 	{
 		Result->SetObjectField(TEXT("node"), NodeState);
