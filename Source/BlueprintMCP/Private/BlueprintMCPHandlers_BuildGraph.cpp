@@ -117,15 +117,99 @@ namespace
 			return Node->FindPin(UEdGraphSchema_K2::PN_Else);
 		}
 
-		// Case-insensitive fallback before giving up.
+		// Case-insensitive fallback, with spaces and underscores treated as equivalent.
+		//
+		// CLAUDE-NOTE: this matters for indexed exec pins. A Sequence node's outputs are really
+		// named "then_0"/"then_1", but the Blueprint editor DISPLAYS them as "Then 0"/"Then 1",
+		// so that spelling is what an agent naturally writes — verified live, where "Seq.then 0"
+		// failed against a real Sequence node. Normalising the separator makes both spellings work.
+		auto Normalize = [](const FString& S) { return S.ToLower().Replace(TEXT(" "), TEXT("_")); };
+		const FString Wanted = Normalize(PinName);
 		for (UEdGraphPin* Pin : Node->Pins)
 		{
-			if (Pin && Pin->PinName.ToString().ToLower() == Lower)
+			if (Pin && Normalize(Pin->PinName.ToString()) == Wanted)
 			{
 				return Pin;
 			}
 		}
 		return nullptr;
+	}
+
+	/** Horizontal gap between layout columns. Wider than a default Print String node. */
+	constexpr int32 ColumnWidth = 440;
+	/** Vertical gap between rows within a column. */
+	constexpr int32 RowHeight = 190;
+
+	/**
+	 * Lay the given nodes out in columns by their exec-flow depth, rows by sibling order.
+	 *
+	 * CLAUDE-NOTE: replaces a naive single-row march (x += 320, y = 0). Verified live against a
+	 * BeginPlay -> Sequence -> {Print, Branch -> {Print, Print}} graph: on one row, Branch's False
+	 * wire ran straight through the True target's node body and Sequence's then_1 ran through its
+	 * then_0 target, and 320px was narrower than a Print String node so bodies overlapped too.
+	 * Depth gives readable left-to-right flow; sibling rows keep branch arms from colliding.
+	 *
+	 * Deliberately NOT a full layered/Sugiyama layout with crossing minimisation — that is a lot of
+	 * machinery for a graph an agent will usually re-read structurally rather than look at. Callers
+	 * who care about exact placement still pass explicit posX/posY, which suppresses this entirely.
+	 */
+	void LayoutByDepth(const TArray<UEdGraphNode*>& Nodes, int32 OriginX, int32 OriginY)
+	{
+		if (Nodes.Num() == 0)
+		{
+			return;
+		}
+		const TSet<UEdGraphNode*> InSet(Nodes);
+
+		// Depth = longest exec path from a node with no predecessor inside this batch. Iterate to a
+		// fixed point rather than recursing, so a cycle can't blow the stack — it just settles.
+		TMap<UEdGraphNode*, int32> Depth;
+		for (UEdGraphNode* N : Nodes)
+		{
+			Depth.Add(N, 0);
+		}
+		for (int32 Pass = 0; Pass < Nodes.Num(); ++Pass)
+		{
+			bool bChanged = false;
+			for (UEdGraphNode* N : Nodes)
+			{
+				for (UEdGraphPin* Pin : N->Pins)
+				{
+					if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+					{
+						continue;
+					}
+					for (UEdGraphPin* Linked : Pin->LinkedTo)
+					{
+						UEdGraphNode* Pred = Linked ? Linked->GetOwningNode() : nullptr;
+						if (!Pred || !InSet.Contains(Pred))
+						{
+							continue; // predecessor outside this batch (e.g. an existing event node)
+						}
+						const int32 Candidate = Depth[Pred] + 1;
+						if (Candidate > Depth[N])
+						{
+							Depth[N] = Candidate;
+							bChanged = true;
+						}
+					}
+				}
+			}
+			if (!bChanged)
+			{
+				break;
+			}
+		}
+
+		TMap<int32, int32> RowCursor;
+		for (UEdGraphNode* N : Nodes)
+		{
+			const int32 Col = Depth[N];
+			const int32 Row = RowCursor.FindOrAdd(Col, 0);
+			RowCursor[Col] = Row + 1;
+			N->NodePosX = OriginX + Col * ColumnWidth;
+			N->NodePosY = OriginY + Row * RowHeight;
+		}
 	}
 
 	/** Human-readable pin list, so a failed wire tells the agent what it could have used. */
@@ -298,9 +382,24 @@ FString FBlueprintMCPServer::HandleBuildGraph(const FString& Body)
 	TArray<TSharedPtr<FJsonValue>> NodeResults;
 	int32 NodesCreated = 0, NodesFailed = 0;
 
+	// Snapshot what was already in the graph so auto-layout can start clear of it rather than
+	// stacking new nodes on top of the default event nodes.
+	const TSet<UEdGraphNode*> PreExisting(TargetGraph->Nodes);
+	int32 LayoutOriginX = 0, LayoutOriginY = 0;
+	for (UEdGraphNode* N : TargetGraph->Nodes)
+	{
+		if (N)
+		{
+			LayoutOriginX = FMath::Max(LayoutOriginX, N->NodePosX + ColumnWidth);
+			LayoutOriginY = FMath::Min(LayoutOriginY, N->NodePosY);
+		}
+	}
+
+	// Nodes created here WITHOUT explicit posX/posY — these are the ones auto-layout owns.
+	TArray<UEdGraphNode*> AutoPositioned;
+
 	if (NodesArray)
 	{
-		int32 AutoX = 0;
 		for (int32 i = 0; i < NodesArray->Num(); ++i)
 		{
 			TSharedPtr<FJsonObject> Spec = (*NodesArray)[i]->AsObject();
@@ -349,14 +448,9 @@ FString FBlueprintMCPServer::HandleBuildGraph(const FString& Body)
 			AddBody->SetStringField(TEXT("graph"), DecodedGraphName);
 			AddBody->SetBoolField(TEXT("deferSave"), true);
 
-			// Give unpositioned nodes a readable left-to-right default instead of stacking
-			// them all at the origin.
-			if (!Spec->HasField(TEXT("posX")) && !Spec->HasField(TEXT("posY")))
-			{
-				AddBody->SetNumberField(TEXT("posX"), AutoX);
-				AddBody->SetNumberField(TEXT("posY"), 0);
-				AutoX += 320;
-			}
+			// Nodes without an explicit position are placed by LayoutByDepth once the wiring
+			// exists (see phase 3.5) — depth isn't knowable until connections are made.
+			const bool bAutoPosition = !Spec->HasField(TEXT("posX")) && !Spec->HasField(TEXT("posY"));
 
 			const FString AddResponse = HandleAddNode(JsonToString(AddBody));
 			TSharedPtr<FJsonObject> AddJson = ParseBodyJson(AddResponse);
@@ -375,6 +469,19 @@ FString FBlueprintMCPServer::HandleBuildGraph(const FString& Body)
 				Entry->SetBoolField(TEXT("success"), true);
 				Entry->SetStringField(TEXT("nodeId"), NewNodeId);
 				NodesCreated++;
+				// Only lay out nodes this call actually created. An OverrideEvent that already
+				// existed comes back via add_node's alreadyExists path; moving it would shove the
+				// user's existing BeginPlay around, which is not ours to do.
+				if (bAutoPosition)
+				{
+					if (UEdGraphNode* Created = FindNodeByGuid(BP, NewNodeId))
+					{
+						if (!PreExisting.Contains(Created))
+						{
+							AutoPositioned.Add(Created);
+						}
+					}
+				}
 			}
 			else
 			{
@@ -591,6 +698,11 @@ FString FBlueprintMCPServer::HandleBuildGraph(const FString& Body)
 			DefaultsSet++;
 		}
 	}
+
+	// ------------------------------------------------------------------
+	// Phase 3.5 — auto-layout. Runs AFTER connections so exec depth is known.
+	// ------------------------------------------------------------------
+	LayoutByDepth(AutoPositioned, LayoutOriginX, LayoutOriginY);
 
 	// ------------------------------------------------------------------
 	// Phase 4 — mark, compile, and save ONCE.

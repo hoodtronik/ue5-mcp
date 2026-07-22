@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { uePost, createTestBlueprint, deleteTestBlueprint, uniqueName } from "../helpers.js";
+import { uePost, ueGet, createTestBlueprint, deleteTestBlueprint, uniqueName } from "../helpers.js";
 
 describe("build_graph", () => {
   const bpName = uniqueName("BP_BuildGraphTest");
@@ -140,6 +140,73 @@ describe("build_graph", () => {
     expect(data.success).toBe(false);
     expect(data.problems.length).toBeGreaterThanOrEqual(3);
     expect(data.problems.join(" ")).toContain("duplicate ref");
+  });
+
+  // CLAUDE-NOTE: regression — found live in the editor, not by the original tests. A Sequence
+  // node's exec outputs are really named "then_0"/"then_1", but the Blueprint editor DISPLAYS
+  // them as "Then 0"/"Then 1", so that is the spelling an agent writes. The first version only
+  // handled single-output nodes and Branch, so "Seq.then 0" failed against a real Sequence.
+  it("resolves displayed pin names that use spaces (then 0 -> then_0)", async () => {
+    const data = await uePost("/api/build-graph", {
+      blueprint: bpName,
+      graph: "EventGraph",
+      nodes: [
+        { ref: "S", nodeType: "Sequence", posX: 0, posY: 1600 },
+        { ref: "A", nodeType: "CallFunction", functionName: "PrintString", posX: 400, posY: 1600 },
+        { ref: "B", nodeType: "CallFunction", functionName: "PrintString", posX: 400, posY: 1780 },
+      ],
+      connections: [
+        { from: "S.then 0", to: "A.execute" },
+        { from: "S.then_1", to: "B.execute" },
+      ],
+    });
+    expect(data.error).toBeUndefined();
+    expect(data.connectionsFailed).toBe(0);
+    expect(data.connectionsMade).toBe(2);
+    // Both spellings must land on the engine's real underscore names.
+    expect(data.connections[0].fromPin).toBe("then_0");
+    expect(data.connections[1].fromPin).toBe("then_1");
+  });
+
+  // CLAUDE-NOTE: regression — the original auto-layout put every node on one row 320px apart,
+  // so branch arms overlapped each other's bodies and wires crossed through nodes. Layout is now
+  // depth-layered: column by exec depth, row by sibling index.
+  it("auto-layouts branch arms into the same column on separate rows", async () => {
+    const layoutBp = uniqueName("BP_BuildGraphLayout");
+    const created = await createTestBlueprint({ name: layoutBp });
+    expect(created.error).toBeUndefined();
+
+    try {
+      const data = await uePost("/api/build-graph", {
+        blueprint: layoutBp,
+        graph: "EventGraph",
+        nodes: [
+          { ref: "Br", nodeType: "Branch" },
+          { ref: "T", nodeType: "CallFunction", functionName: "PrintString" },
+          { ref: "F", nodeType: "CallFunction", functionName: "PrintString" },
+        ],
+        connections: [
+          { from: "Br.true", to: "T.execute" },
+          { from: "Br.false", to: "F.execute" },
+        ],
+      });
+      expect(data.error).toBeUndefined();
+      expect(data.connectionsFailed).toBe(0);
+
+      const ids = Object.fromEntries(data.nodes.map((n: any) => [n.ref, n.nodeId]));
+      const graph = await ueGet("/api/graph", { name: layoutBp, graph: "EventGraph" });
+      const at = (id: string) => graph.nodes.find((n: any) => n.id === id);
+      const br = at(ids.Br), t = at(ids.T), f = at(ids.F);
+
+      // Branch feeds both arms, so both arms share the next column...
+      expect(t.posX).toBe(f.posX);
+      expect(t.posX).toBeGreaterThan(br.posX);
+      // ...and must not sit on top of each other.
+      expect(t.posY).not.toBe(f.posY);
+      expect(Math.abs(t.posY - f.posY)).toBeGreaterThanOrEqual(150);
+    } finally {
+      await deleteTestBlueprint(`${packagePath}/${layoutBp}`);
+    }
   });
 
   it("returns an error for a non-existent blueprint", async () => {
