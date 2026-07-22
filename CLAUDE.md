@@ -1,6 +1,6 @@
 # BlueprintMCP — Claude Code Instructions
 
-A UE5 editor plugin that exposes 38 MCP tools for inspecting and modifying Blueprint assets. Works with any UE5 5.4+ project.
+A UE5 editor plugin that exposes 196 MCP tools for inspecting and modifying Blueprint assets. Targets **UE 5.6.1** — this is the version the plugin is built and tested against.
 
 Two serving modes:
 - **Editor subsystem** (preferred): Auto-starts on port 9847 when the UE5 editor is open. Zero overhead.
@@ -16,9 +16,24 @@ Follow these steps sequentially when installing BlueprintMCP into a UE5 project 
 
 | Requirement | Check command | Notes |
 |-------------|--------------|-------|
-| UE5 5.4+ | `ls "C:/Program Files/Epic Games/UE_5.4/"` | Uses Editor-only modules (`UnrealEd`, `BlueprintGraph`, `KismetCompiler`) |
+| UE 5.6.1 | `ls "C:/Program Files/Epic Games/UE_5.6/"` | Uses Editor-only modules (`UnrealEd`, `BlueprintGraph`, `KismetCompiler`). Other 5.x versions are untested — see [Engine version](#engine-version). |
 | Node.js 18+ | `node --version` | Required for the TypeScript MCP server |
 | npm | `npm --version` | Comes with Node.js |
+
+### Engine version
+
+The plugin targets **UE 5.6.1**. That is the only version it is built and tested against, and the
+prebuilt binaries are 5.6/Win64.
+
+This used to be documented as "5.4+", which was aspirational rather than verified — nothing in the
+repo has been built against 5.4 or 5.5 in a long time, and some engine APIs the plugin uses do not
+exist that far back (for example the `TRACE_BEGIN_REGION` / `TRACE_END_REGION` macros land in 5.6).
+Treat 5.6.1 as the floor.
+
+Other 5.x versions may well compile, but if you build against one, expect to fix API drift yourself
+and do not assume the test suite has covered it. The `.uplugin` deliberately declares no
+`EngineVersion` field, so the editor will not refuse to load the plugin on a different engine — the
+constraint is documentation, not enforcement.
 
 ### Step 1: Clone into the project
 
@@ -104,7 +119,7 @@ The C++ plugin compiles automatically when the UE5 editor opens the project. No 
 
 Optional pre-compile (replace project name and path):
 ```bash
-"C:\Program Files\Epic Games\UE_5.4\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe" YourProjectEditor Win64 Development -Project="C:\path\to\YourProject.uproject" -WaitMutex
+"C:\Program Files\Epic Games\UE_5.6\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe" YourProjectEditor Win64 Development -Project="C:\path\to\YourProject.uproject" -WaitMutex
 ```
 
 ### Step 5: Verify end-to-end
@@ -176,7 +191,7 @@ attrib -R "Plugins\BlueprintMCP\Tools\dist\index.js.map"
 
 Build from the project root:
 ```bash
-"C:\Program Files\Epic Games\UE_5.4\Engine\Build\BatchFiles\Build.bat" <YourProject>Editor Win64 Development "<path\to\YourProject.uproject>" -waitmutex
+"C:\Program Files\Epic Games\UE_5.6\Engine\Build\BatchFiles\Build.bat" <YourProject>Editor Win64 Development "<path\to\YourProject.uproject>" -waitmutex
 ```
 
 Or open the `.sln` in Visual Studio and build **Development Editor | Win64** (Ctrl+Shift+B).
@@ -263,7 +278,7 @@ The test suite is self-bootstrapping: it generates a temporary UE5 project, spaw
 ```bash
 cd Plugins/BlueprintMCP/Tools
 
-# Run full test suite (requires UE5 5.4+ installed)
+# Run full test suite (requires UE 5.6.1 installed)
 npm test
 
 # Watch mode (re-runs on file changes)

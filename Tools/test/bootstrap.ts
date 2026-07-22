@@ -75,7 +75,10 @@ function detectEngineVersion(): string {
       return dirs[0].replace("UE_", "");
     }
   } catch { /* directory not found */ }
-  return "5.4"; // fallback
+  // CLAUDE-NOTE: fallback matches the plugin's supported engine version (5.6), not an older
+  // floor — a wrong fallback here silently generates a temp project pinned to an engine we
+  // don't build against, and the failure surfaces much later as a confusing commandlet error.
+  return "5.6"; // fallback
 }
 
 function findEditorCmd(): string | null {
