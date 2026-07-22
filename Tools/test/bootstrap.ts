@@ -26,8 +26,33 @@ let cmdProcess: ChildProcess | null = null;
 // Temp project generation
 // ---------------------------------------------------------------------------
 
+/**
+ * Where to generate the throwaway test project.
+ *
+ * CLAUDE-NOTE: deliberately NOT os.tmpdir(). UE expresses project paths relative to
+ * Engine/Binaries/Win64, so when the temp dir is on the SAME drive as the engine it produces a
+ * long "../../../../../.." chain. FilenameToLongPackageName rejects that ("the path contains
+ * illegal characters '.'") and the commandlet dies with a fatal error during startup — before the
+ * HTTP server binds, so the only visible symptom is "Commandlet failed to become healthy within
+ * 4 minutes". Putting the project on the plugin's drive (normally not the engine drive) keeps UE
+ * on absolute paths. Override with UE_TEST_TMP if that drive is unsuitable.
+ */
+function testTempRoot(): string {
+  if (process.env.UE_TEST_TMP) return process.env.UE_TEST_TMP;
+  // Compare drive LETTERS, not root strings — path.parse can return "F:/" or "F:\" depending on
+  // how the path was built, so a raw string compare can call the same drive different.
+  const driveLetter = (p: string): string => (path.parse(p).root.match(/[a-zA-Z]/)?.[0] ?? "").toLowerCase();
+  const pluginDrive = driveLetter(PLUGIN_ROOT);
+  const engineDrive = driveLetter(findEditorCmd() ?? "C:\\");
+  if (pluginDrive && pluginDrive !== engineDrive) {
+    return path.join(path.parse(PLUGIN_ROOT).root, ".bpmcp-test");
+  }
+  // Same drive (or undetectable): fall back to the OS temp dir and hope the path is shallow.
+  return os.tmpdir();
+}
+
 export function generateTempProject(): string {
-  const dir = path.join(os.tmpdir(), `BlueprintMCP_Test_${Date.now()}`);
+  const dir = path.join(testTempRoot(), `BlueprintMCP_Test_${Date.now()}`);
   fs.mkdirSync(dir, { recursive: true });
 
   // Minimal .uproject — engine version must match the compiled plugin DLL
@@ -64,39 +89,65 @@ export function generateTempProject(): string {
 // Commandlet lifecycle
 // ---------------------------------------------------------------------------
 
-/** Detect the UE engine version by scanning for installed engines (prefer newest). */
+/**
+ * Engine version this plugin targets. Must match the version the C++ was compiled against.
+ *
+ * CLAUDE-NOTE: the compiled plugin DLL carries a BuildId tied to ONE engine version. Launching a
+ * different editor against it fails with "Plugin 'BlueprintMCP' failed to load because module
+ * 'BlueprintMCP' could not be found" — which reads like a missing binary, not a version mismatch,
+ * and costs a long time to diagnose. These helpers used to prefer the NEWEST installed engine,
+ * so on a machine with 5.6 through 5.8 installed every test run silently launched 5.8 against a
+ * 5.6 DLL and could never pass. Prefer the target version; only fall back to newest if it's absent,
+ * and say so loudly when that happens.
+ */
+const TARGET_ENGINE_VERSION = "5.6";
+
+const ENGINE_BASES = [
+  "C:\\Program Files\\Epic Games",
+  "C:\\Program Files (x86)\\Epic Games",
+];
+
+/** Installed engine version strings (e.g. "5.6"), newest first. */
+function installedEngineVersions(): string[] {
+  const found = new Set<string>();
+  for (const base of ENGINE_BASES) {
+    try {
+      for (const d of fs.readdirSync(base)) {
+        if (d.startsWith("UE_")) found.add(d.replace("UE_", ""));
+      }
+    } catch { /* directory not found */ }
+  }
+  return [...found].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+}
+
+/** Engine version to generate the temp project against — the target if installed. */
 function detectEngineVersion(): string {
-  const base = "C:\\Program Files\\Epic Games";
-  try {
-    const dirs = fs.readdirSync(base).filter((d) => d.startsWith("UE_"));
-    // Sort descending so newest version is first
-    dirs.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    if (dirs.length > 0) {
-      return dirs[0].replace("UE_", "");
-    }
-  } catch { /* directory not found */ }
-  // CLAUDE-NOTE: fallback matches the plugin's supported engine version (5.6), not an older
-  // floor — a wrong fallback here silently generates a temp project pinned to an engine we
-  // don't build against, and the failure surfaces much later as a confusing commandlet error.
-  return "5.6"; // fallback
+  const installed = installedEngineVersions();
+  if (installed.includes(TARGET_ENGINE_VERSION)) return TARGET_ENGINE_VERSION;
+  if (installed.length > 0) {
+    console.warn(
+      `[bootstrap] UE ${TARGET_ENGINE_VERSION} not installed; falling back to ${installed[0]}. ` +
+      `The plugin DLL is built for ${TARGET_ENGINE_VERSION}, so the module will likely fail to load.`,
+    );
+    return installed[0];
+  }
+  return TARGET_ENGINE_VERSION;
 }
 
 function findEditorCmd(): string | null {
   if (process.env.UE_EDITOR_CMD && fs.existsSync(process.env.UE_EDITOR_CMD)) {
     return process.env.UE_EDITOR_CMD;
   }
-  // Scan for installed UE versions, preferring newest
-  const base = "C:\\Program Files\\Epic Games";
-  const bases = [base, "C:\\Program Files (x86)\\Epic Games"];
-  for (const b of bases) {
-    try {
-      const dirs = fs.readdirSync(b).filter((d) => d.startsWith("UE_"));
-      dirs.sort((a, bv) => bv.localeCompare(a, undefined, { numeric: true }));
-      for (const d of dirs) {
-        const cmd = path.join(b, d, "Engine", "Binaries", "Win64", "UnrealEditor-Cmd.exe");
-        if (fs.existsSync(cmd)) return cmd;
-      }
-    } catch { /* directory not found */ }
+  // Try the target version first, then any other installed engine as a fallback.
+  const ordered = [
+    TARGET_ENGINE_VERSION,
+    ...installedEngineVersions().filter((v) => v !== TARGET_ENGINE_VERSION),
+  ];
+  for (const version of ordered) {
+    for (const base of ENGINE_BASES) {
+      const cmd = path.join(base, `UE_${version}`, "Engine", "Binaries", "Win64", "UnrealEditor-Cmd.exe");
+      if (fs.existsSync(cmd)) return cmd;
+    }
   }
   return null;
 }
