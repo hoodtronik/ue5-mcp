@@ -8,21 +8,25 @@ export function registerParamTools(server: McpServer): void {
     "change_function_parameter_type",
     `Change a function or custom event parameter's type. Supports all types: primitives (bool, int, float, string), structs, enums, and object references. Works with both Blueprint functions (K2Node_FunctionEntry) and custom events (K2Node_CustomEvent). Reconstructs the node to update output pins. Call refresh_all_nodes afterwards to propagate changes to downstream Break nodes. ${TYPE_NAME_DOCS} Pass dryRun=true to preview changes without saving.`,
     {
-      blueprint: z.string().describe("Blueprint name or package path (e.g. 'BP_PatientManager')"),
-      functionName: z.string().describe("Function or custom event name (e.g. 'UpdateVitals', 'SetSkinState')"),
-      paramName: z.string().describe("Parameter name to change (e.g. 'Vitals', 'SkinState')"),
-      newType: z.string().describe("New type: primitive ('bool', 'float'), struct ('FVitals'), enum ('EMyEnum'), or reference ('object:Actor', 'class:Actor', 'softobject:Actor')"),
+      blueprint: z.string().optional().describe("Blueprint name or package path (e.g. 'BP_PatientManager'). Required for single mode."),
+      functionName: z.string().optional().describe("Function or custom event name (e.g. 'UpdateVitals', 'SetSkinState'). Required for single mode."),
+      paramName: z.string().optional().describe("Parameter name to change (e.g. 'Vitals', 'SkinState'). Required for single mode."),
+      newType: z.string().optional().describe("New type: primitive ('bool', 'float'), struct ('FVitals'), enum ('EMyEnum'), or reference ('object:Actor', 'class:Actor', 'softobject:Actor'). Required for single mode."),
       dryRun: z.boolean().optional().describe("If true, preview changes without modifying the Blueprint"),
       batch: z.array(z.object({
         blueprint: z.string(),
         functionName: z.string(),
         paramName: z.string(),
         newType: z.string(),
-      })).optional().describe("Batch mode: array of {blueprint, functionName, paramName, newType} objects. When provided, single params are ignored."),
+      })).optional().describe("Batch mode: array of {blueprint, functionName, paramName, newType} objects. When provided, single params above are ignored."),
     },
     async ({ blueprint, functionName, paramName, newType, dryRun, batch }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      if (!batch && !(blueprint && functionName && paramName && newType)) {
+        return { content: [{ type: "text" as const, text: "Error: provide either all single-mode fields (blueprint, functionName, paramName, newType) or 'batch'." }] };
+      }
 
       const body: Record<string, any> = batch
         ? { batch }

@@ -66,16 +66,20 @@ export function registerMutationTools(server: McpServer): void {
     "delete_asset",
     "Delete a .uasset file after confirming no remaining references. By default refuses to delete if the asset is still referenced. Use force=true to delete anyway (references become stale). Use find_asset_references first to check dependencies.",
     {
-      assetPath: z.string().describe("Full asset path to delete (e.g. '/Game/Blueprints/WebUI/S_Vitals')"),
+      assetPath: z.string().optional().describe("Full asset path to delete (e.g. '/Game/Blueprints/WebUI/S_Vitals'). Required unless 'batch' is provided."),
       force: z.boolean().optional().describe("If true, force-delete even if references exist. Stale references will remain and must be cleaned up manually."),
       batch: z.array(z.object({
         assetPath: z.string(),
         force: z.boolean().optional(),
-      })).optional().describe("Batch mode: array of {assetPath, force?} objects. When provided, single params are ignored."),
+      })).optional().describe("Batch mode: array of {assetPath, force?} objects. When provided, assetPath/force above are ignored."),
     },
     async ({ assetPath, force, batch }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      if (!batch && !assetPath) {
+        return { content: [{ type: "text" as const, text: "Error: provide either 'assetPath' or 'batch'." }] };
+      }
 
       const body: Record<string, any> = batch
         ? { batch }
@@ -162,22 +166,26 @@ export function registerMutationTools(server: McpServer): void {
     "connect_pins",
     "Wire two pins together in a Blueprint graph. Uses type-validated connection (TryCreateConnection) so incompatible types will fail with details. Get node IDs and pin names from get_blueprint_graph first.",
     {
-      blueprint: z.string().describe("Blueprint name or package path (e.g. 'BP_PatientJson')"),
-      sourceNodeId: z.string().describe("GUID of the source node (from get_blueprint_graph node 'id' field)"),
-      sourcePinName: z.string().describe("Name of the output pin on the source node"),
-      targetNodeId: z.string().describe("GUID of the target node"),
-      targetPinName: z.string().describe("Name of the input pin on the target node"),
+      blueprint: z.string().optional().describe("Blueprint name or package path (e.g. 'BP_PatientJson'). Required for single mode."),
+      sourceNodeId: z.string().optional().describe("GUID of the source node (from get_blueprint_graph node 'id' field). Required for single mode."),
+      sourcePinName: z.string().optional().describe("Name of the output pin on the source node. Required for single mode."),
+      targetNodeId: z.string().optional().describe("GUID of the target node. Required for single mode."),
+      targetPinName: z.string().optional().describe("Name of the input pin on the target node. Required for single mode."),
       batch: z.array(z.object({
         blueprint: z.string(),
         sourceNodeId: z.string(),
         sourcePinName: z.string(),
         targetNodeId: z.string(),
         targetPinName: z.string(),
-      })).optional().describe("Batch mode: array of connection objects. When provided, single params are ignored."),
+      })).optional().describe("Batch mode: array of connection objects. When provided, single params above are ignored."),
     },
     async ({ blueprint, sourceNodeId, sourcePinName, targetNodeId, targetPinName, batch }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      if (!batch && !(blueprint && sourceNodeId && sourcePinName && targetNodeId && targetPinName)) {
+        return { content: [{ type: "text" as const, text: "Error: provide either all single-mode fields (blueprint, sourceNodeId, sourcePinName, targetNodeId, targetPinName) or 'batch'." }] };
+      }
 
       const body: Record<string, any> = batch
         ? { batch }

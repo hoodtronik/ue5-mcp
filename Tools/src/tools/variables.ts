@@ -8,9 +8,9 @@ export function registerVariableTools(server: McpServer): void {
     "change_variable_type",
     `Change a Blueprint member variable's type. Supports structs, enums, and object reference types. Compiles and saves the Blueprint. Downstream Make/Break nodes using the old type will need manual fixing. ${TYPE_NAME_DOCS} For object references, either use colon syntax in newType (e.g. 'object:Actor') or pass typeCategory + class name in newType. Pass dryRun=true to preview changes without saving.`,
     {
-      blueprint: z.string().describe("Blueprint name or package path (e.g. 'BP_PatientManager')"),
-      variable: z.string().describe("Variable name (e.g. 'Vitals')"),
-      newType: z.string().describe("New type name: struct ('FVitals'), enum ('ELungSound'), or colon syntax for references ('object:Actor', 'class:Actor', 'softobject:Actor', 'softclass:Actor', 'interface:MyInterface')"),
+      blueprint: z.string().optional().describe("Blueprint name or package path (e.g. 'BP_PatientManager'). Required for single mode."),
+      variable: z.string().optional().describe("Variable name (e.g. 'Vitals'). Required for single mode."),
+      newType: z.string().optional().describe("New type name: struct ('FVitals'), enum ('ELungSound'), or colon syntax for references ('object:Actor', 'class:Actor', 'softobject:Actor', 'softclass:Actor', 'interface:MyInterface'). Required for single mode."),
       typeCategory: z.enum(["struct", "enum", "object", "softobject", "class", "softclass", "interface"]).optional().describe("Type category. Optional — auto-detected from newType when using colon syntax or F/E prefix."),
       dryRun: z.boolean().optional().describe("If true, preview changes without modifying the Blueprint"),
       batch: z.array(z.object({
@@ -18,11 +18,15 @@ export function registerVariableTools(server: McpServer): void {
         variable: z.string(),
         newType: z.string(),
         typeCategory: z.enum(["struct", "enum", "object", "softobject", "class", "softclass", "interface"]).optional(),
-      })).optional().describe("Batch mode: array of {blueprint, variable, newType, typeCategory?} objects. When provided, single params are ignored."),
+      })).optional().describe("Batch mode: array of {blueprint, variable, newType, typeCategory?} objects. When provided, single params above are ignored."),
     },
     async ({ blueprint, variable, newType, typeCategory, dryRun, batch }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      if (!batch && !(blueprint && variable && newType)) {
+        return { content: [{ type: "text" as const, text: "Error: provide either all single-mode fields (blueprint, variable, newType) or 'batch'." }] };
+      }
 
       const body: Record<string, any> = batch
         ? { batch }
