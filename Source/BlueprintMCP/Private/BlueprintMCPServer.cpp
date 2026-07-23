@@ -858,6 +858,133 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/is-pie-running")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("isPieRunning")));
 
+	// CLAUDE-NOTE: routes below were missing entirely -- their handlers were implemented and
+	// declared but never bound, so the matching MCP tools were advertised to agents and 404'd
+	// at runtime. Adding a handler requires BOTH a BindRoute here AND a HandlerMap entry in
+	// RegisterHandlers(); forgetting either produces exactly that silent failure.
+	Router->BindRoute(FHttpPath(TEXT("/api/actor-properties")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("actorProperties")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/attach-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("attachActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/begin-transaction")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("beginTransaction")));
+	Router->BindRoute(FHttpPath(TEXT("/api/clear-output-log")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("clearOutputLog")));
+	Router->BindRoute(FHttpPath(TEXT("/api/clear-selection")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("clearSelection")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-widget-blueprint")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createWidgetBlueprint")));
+	Router->BindRoute(FHttpPath(TEXT("/api/current-level")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("currentLevel")));
+	Router->BindRoute(FHttpPath(TEXT("/api/delete-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("deleteActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/detach-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("detachActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/duplicate-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("duplicateActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/editor-notification")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("editorNotification")));
+	Router->BindRoute(FHttpPath(TEXT("/api/end-transaction")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("endTransaction")));
+	Router->BindRoute(FHttpPath(TEXT("/api/find-actors-by-class")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("findActorsByClass")));
+	Router->BindRoute(FHttpPath(TEXT("/api/find-actors-by-tag")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("findActorsByTag")));
+	Router->BindRoute(FHttpPath(TEXT("/api/find-actors-in-radius")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("findActorsInRadius")));
+	Router->BindRoute(FHttpPath(TEXT("/api/focus-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("focusActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-actor-bounds")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getActorBounds")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-cvar")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getCvar")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-dirty-packages")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getDirtyPackages")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-editor-selection")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getEditorSelection")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-level-info")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getLevelInfo")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-output-log")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getOutputLog")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-viewport-camera")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getViewportCamera")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-widget-properties")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getWidgetProperties")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-actors")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("listActors")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-cvars")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listCvars")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-sublevels")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listSublevels")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-widget-tree")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listWidgetTree")));
+	Router->BindRoute(FHttpPath(TEXT("/api/load-sublevel")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("loadSublevel")));
+	Router->BindRoute(FHttpPath(TEXT("/api/move-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("moveWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/navigate-content-browser")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("navigateContentBrowser")));
+	Router->BindRoute(FHttpPath(TEXT("/api/open-asset-editor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("openAssetEditor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pie-get-player-transform")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pieGetPlayerTransform")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pie-pause")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("piePause")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pie-query-actors")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pieQueryActors")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pie-teleport-player")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pieTeleportPlayer")));
+	Router->BindRoute(FHttpPath(TEXT("/api/raycast")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("raycast")));
+	Router->BindRoute(FHttpPath(TEXT("/api/redo")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("redo")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/rename-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("renameActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/save-all")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("saveAll")));
+	Router->BindRoute(FHttpPath(TEXT("/api/selected-actors")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("selectedActors")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-mobility")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorMobility")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-physics")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorPhysics")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-property")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorProperty")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-tags")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorTags")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-transform")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorTransform")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-visibility")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setActorVisibility")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-cvar")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setCvar")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-editor-selection")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setEditorSelection")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-game-view")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setGameView")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-realtime-rendering")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setRealtimeRendering")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-show-flags")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setShowFlags")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-view-mode")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setViewMode")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-viewport-camera")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setViewportCamera")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-viewport-type")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setViewportType")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-widget-property")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setWidgetProperty")));
+	Router->BindRoute(FHttpPath(TEXT("/api/spawn-actor")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("spawnActor")));
+	Router->BindRoute(FHttpPath(TEXT("/api/undo")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("undo")));
+	Router->BindRoute(FHttpPath(TEXT("/api/unload-sublevel")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("unloadSublevel")));
+
 	// Register TMap dispatch handlers
 	RegisterHandlers();
 
@@ -1161,6 +1288,70 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("startPie"),                [this](const TMap<FString, FString>&, const FString& B) { return HandleStartPIE(B); });
 	HandlerMap.Add(TEXT("stopPie"),                 [this](const TMap<FString, FString>&, const FString& B) { return HandleStopPIE(B); });
 	HandlerMap.Add(TEXT("isPieRunning"),            [this](const TMap<FString, FString>&, const FString& B) { return HandleIsPIERunning(B); });
+
+	// CLAUDE-NOTE: dispatch entries paired with the BindRoute block in Start(). See the note
+	// there -- these handlers existed but were unreachable until both halves were registered.
+	HandlerMap.Add(TEXT("actorProperties"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetActorProperties(P, B); });
+	HandlerMap.Add(TEXT("addWidget"), [this](const TMap<FString, FString>&, const FString& B) { return HandleAddWidget(B); });
+	HandlerMap.Add(TEXT("attachActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleAttachActor(B); });
+	HandlerMap.Add(TEXT("beginTransaction"), [this](const TMap<FString, FString>&, const FString& B) { return HandleBeginTransaction(B); });
+	HandlerMap.Add(TEXT("clearOutputLog"), [this](const TMap<FString, FString>&, const FString& B) { return HandleClearOutputLog(B); });
+	HandlerMap.Add(TEXT("clearSelection"), [this](const TMap<FString, FString>&, const FString& B) { return HandleClearSelection(B); });
+	HandlerMap.Add(TEXT("createWidgetBlueprint"), [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateWidgetBlueprint(B); });
+	HandlerMap.Add(TEXT("currentLevel"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
+	HandlerMap.Add(TEXT("deleteActor"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleDeleteActor(P, B); });
+	HandlerMap.Add(TEXT("detachActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleDetachActor(B); });
+	HandlerMap.Add(TEXT("duplicateActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleDuplicateActor(B); });
+	HandlerMap.Add(TEXT("editorNotification"), [this](const TMap<FString, FString>&, const FString& B) { return HandleEditorNotification(B); });
+	HandlerMap.Add(TEXT("endTransaction"), [this](const TMap<FString, FString>&, const FString& B) { return HandleEndTransaction(B); });
+	HandlerMap.Add(TEXT("findActorsByClass"), [this](const TMap<FString, FString>&, const FString& B) { return HandleFindActorsByClass(B); });
+	HandlerMap.Add(TEXT("findActorsByTag"), [this](const TMap<FString, FString>&, const FString& B) { return HandleFindActorsByTag(B); });
+	HandlerMap.Add(TEXT("findActorsInRadius"), [this](const TMap<FString, FString>&, const FString& B) { return HandleFindActorsInRadius(B); });
+	HandlerMap.Add(TEXT("focusActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleFocusActor(B); });
+	HandlerMap.Add(TEXT("getActorBounds"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetActorBounds(B); });
+	HandlerMap.Add(TEXT("getCvar"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetCVar(B); });
+	HandlerMap.Add(TEXT("getDirtyPackages"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetDirtyPackages(B); });
+	HandlerMap.Add(TEXT("getEditorSelection"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetEditorSelection(B); });
+	HandlerMap.Add(TEXT("getLevelInfo"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetLevelInfo(B); });
+	HandlerMap.Add(TEXT("getOutputLog"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetOutputLog(B); });
+	HandlerMap.Add(TEXT("getViewportCamera"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetViewportCamera(B); });
+	HandlerMap.Add(TEXT("getWidgetProperties"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetWidgetProperties(B); });
+	HandlerMap.Add(TEXT("listActors"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleListActors(P, B); });
+	HandlerMap.Add(TEXT("listCvars"), [this](const TMap<FString, FString>&, const FString& B) { return HandleListCVars(B); });
+	HandlerMap.Add(TEXT("listSublevels"), [this](const TMap<FString, FString>&, const FString& B) { return HandleListSublevels(B); });
+	HandlerMap.Add(TEXT("listWidgetTree"), [this](const TMap<FString, FString>&, const FString& B) { return HandleListWidgetTree(B); });
+	HandlerMap.Add(TEXT("loadSublevel"), [this](const TMap<FString, FString>&, const FString& B) { return HandleLoadSublevel(B); });
+	HandlerMap.Add(TEXT("moveWidget"), [this](const TMap<FString, FString>&, const FString& B) { return HandleMoveWidget(B); });
+	HandlerMap.Add(TEXT("navigateContentBrowser"), [this](const TMap<FString, FString>&, const FString& B) { return HandleNavigateContentBrowser(B); });
+	HandlerMap.Add(TEXT("openAssetEditor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleOpenAssetEditor(B); });
+	HandlerMap.Add(TEXT("pieGetPlayerTransform"), [this](const TMap<FString, FString>&, const FString& B) { return HandlePIEGetPlayerTransform(B); });
+	HandlerMap.Add(TEXT("piePause"), [this](const TMap<FString, FString>&, const FString& B) { return HandlePIEPause(B); });
+	HandlerMap.Add(TEXT("pieQueryActors"), [this](const TMap<FString, FString>&, const FString& B) { return HandlePIEQueryActors(B); });
+	HandlerMap.Add(TEXT("pieTeleportPlayer"), [this](const TMap<FString, FString>&, const FString& B) { return HandlePIETeleportPlayer(B); });
+	HandlerMap.Add(TEXT("raycast"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRaycast(B); });
+	HandlerMap.Add(TEXT("redo"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRedo(B); });
+	HandlerMap.Add(TEXT("removeWidget"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveWidget(B); });
+	HandlerMap.Add(TEXT("renameActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRenameActor(B); });
+	HandlerMap.Add(TEXT("saveAll"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSaveAll(B); });
+	HandlerMap.Add(TEXT("selectedActors"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetSelectedActors(P, B); });
+	HandlerMap.Add(TEXT("setActorMobility"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorMobility(B); });
+	HandlerMap.Add(TEXT("setActorPhysics"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorPhysics(B); });
+	HandlerMap.Add(TEXT("setActorProperty"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleSetActorProperty(P, B); });
+	HandlerMap.Add(TEXT("setActorTags"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorTags(B); });
+	HandlerMap.Add(TEXT("setActorTransform"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleSetActorTransform(P, B); });
+	HandlerMap.Add(TEXT("setActorVisibility"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorVisibility(B); });
+	HandlerMap.Add(TEXT("setCvar"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetCVar(B); });
+	HandlerMap.Add(TEXT("setEditorSelection"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetEditorSelection(B); });
+	HandlerMap.Add(TEXT("setGameView"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetGameView(B); });
+	HandlerMap.Add(TEXT("setRealtimeRendering"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetRealtimeRendering(B); });
+	HandlerMap.Add(TEXT("setShowFlags"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetShowFlags(B); });
+	HandlerMap.Add(TEXT("setViewMode"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetViewMode(B); });
+	HandlerMap.Add(TEXT("setViewportCamera"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetViewportCamera(B); });
+	HandlerMap.Add(TEXT("setViewportType"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetViewportType(B); });
+	HandlerMap.Add(TEXT("setWidgetProperty"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetWidgetProperty(B); });
+	HandlerMap.Add(TEXT("spawnActor"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleSpawnActor(P, B); });
+	HandlerMap.Add(TEXT("undo"), [this](const TMap<FString, FString>&, const FString& B) { return HandleUndo(B); });
+	HandlerMap.Add(TEXT("unloadSublevel"), [this](const TMap<FString, FString>&, const FString& B) { return HandleUnloadSublevel(B); });
 }
 
 // ============================================================
