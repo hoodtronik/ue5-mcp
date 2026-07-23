@@ -1669,6 +1669,27 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 				if (ExistingEvent->bOverrideFunction &&
 					ExistingEvent->EventReference.GetMemberName() == FName(*FunctionName))
 				{
+					// CLAUDE-NOTE: promote a still-ghost override-event stub to a permanently real
+					// node. UE auto-places a disabled "ghost" K2Node_Event for every overridable
+					// function when an Animation/Actor Blueprint's EventGraph is first opened
+					// (FKismetEditorUtilities, Kismet2.cpp). Wiring TO one via connect_pins DOES
+					// auto-promote it (UEdGraphPin::MakeLinkTo -> ConvertConnectedGhostNodesToRealNodes)
+					// but only via SetEnabledState(Enabled, bUserAction=false) — bUserSetEnabledState
+					// stays false, so IsAutomaticallyPlacedGhostNode() can still flip back to true and
+					// something later re-ghosts the node, silently clearing its and its immediate
+					// downstream nodes' pin connections (reproduced via an ~30-node ABP EventGraph
+					// while investigating github.com/mirno-ehf/ue5-mcp#70 — "connect_pins connections
+					// silently revert"). bUserAction=true is what a real "implement this override" UI
+					// action sets, and is the only thing that makes the promotion permanent.
+					if (ExistingEvent->IsAutomaticallyPlacedGhostNode())
+					{
+						ExistingEvent->Modify();
+						ExistingEvent->SetEnabledState(ENodeEnabledState::Enabled, /*bUserAction=*/true);
+						ExistingEvent->NodeComment.Empty();
+						FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+						SaveBlueprintPackage(BP);
+					}
+
 					// Already exists — return it with alreadyExists flag
 					TSharedPtr<FJsonObject> NodeState = SerializeNode(ExistingEvent);
 					TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -1697,6 +1718,10 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 		EventNode->NodePosY = PosY;
 		TargetGraph->AddNode(EventNode, false, false);
 		EventNode->AllocateDefaultPins();
+		// Defense in depth alongside the "already exists" branch above: mark this freshly-created
+		// override event as a permanent, user-implemented node from the start so it can never be
+		// mistaken for (or later reverted to) an auto-placed ghost stub.
+		EventNode->SetEnabledState(ENodeEnabledState::Enabled, /*bUserAction=*/true);
 		NewNode = EventNode;
 	}
 	else if (NodeType == TEXT("CallParentFunction"))

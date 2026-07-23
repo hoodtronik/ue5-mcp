@@ -42,6 +42,14 @@ describe("add_node", () => {
     // returns the existing node with alreadyExists=true and no saved field.
     if (data.alreadyExists) {
       expect(data.alreadyExists).toBe(true);
+      // CLAUDE-NOTE: regression check for the ghost-node fix (github.com/mirno-ehf/ue5-mcp#70).
+      // A fresh Actor BP auto-places ReceiveBeginPlay as a disabled "ghost" stub — its NodeComment
+      // is UE's literal "This node is disabled and will not be called..." text. add_node's
+      // already-exists branch must permanently promote it (SetEnabledState(Enabled, bUserAction=true)
+      // + clear the comment) so it can't later be silently re-ghosted (which was observed to also
+      // clear the node's own and its downstream nodes' pin connections). SerializeNode omits the
+      // 'comment' field entirely once NodeComment is empty, so its absence here is the assertion.
+      expect(data.node?.comment).toBeUndefined();
     } else {
       expect(data.saved).toBe(true);
     }
