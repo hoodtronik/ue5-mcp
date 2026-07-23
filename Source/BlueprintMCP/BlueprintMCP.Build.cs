@@ -17,7 +17,11 @@ public class BlueprintMCP : ModuleRules
 			"JsonUtilities",
 			"HTTPServer",
 			"Sockets",
-			"Networking"
+			"Networking",
+			// CLAUDE-NOTE: Niagara runtime modules — needed for UNiagaraSystem/UNiagaraEmitter
+			// references in handler code. NiagaraEditor is editor-only (see Private list).
+			"Niagara",
+			"NiagaraCore"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -44,7 +48,10 @@ public class BlueprintMCP : ModuleRules
 			"PythonScriptPlugin",
 			// CLAUDE-NOTE: added for PCG graph authoring endpoints (BlueprintMCPHandlers_PCG.cpp) —
 			// graph user-parameters + override-pin binding via the PCG editor C++ API.
-			"PCG"
+			"PCG",
+			// CLAUDE-NOTE: NiagaraEditor exposes factories, the stack ViewModel, and module
+			// library helpers — all editor-only. Wrap usage with WITH_EDITOR.
+			"NiagaraEditor"
 		});
 	}
 }

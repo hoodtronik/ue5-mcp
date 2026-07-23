@@ -273,7 +273,13 @@ export function summarizeBlueprint(data: any): string {
       const defVal = v.defaultValue ? ` = ${v.defaultValue}` : "";
       const cat = v.category ? ` [${v.category}]` : "";
       const typeStr = flagType(formatVarType(v));
-      lines.push(`  ${v.name}: ${typeStr}${defVal}${cat}`);
+      // CLAUDE-NOTE: Surface exposure flags (from C++ PropertyFlags) so investigations can
+      // see at a glance which vars are public/Instance-Editable (what disguise/RenderStream reads).
+      const exposure: string[] = [];
+      if (v.instanceEditable) exposure.push("InstanceEditable");
+      if (v.exposeOnSpawn) exposure.push("ExposeOnSpawn");
+      const exp = exposure.length ? ` {${exposure.join(", ")}}` : "";
+      lines.push(`  ${v.name}: ${typeStr}${defVal}${cat}${exp}`);
     }
   }
 

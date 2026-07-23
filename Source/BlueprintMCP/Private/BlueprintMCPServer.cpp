@@ -985,6 +985,50 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/unload-sublevel")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("unloadSublevel")));
 
+	// Niagara tools (Tier 1: asset creation + introspection)
+	Router->BindRoute(FHttpPath(TEXT("/api/create-niagara-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createNiagaraSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-niagara-emitter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createNiagaraEmitter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-emitter-to-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addEmitterToSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-niagara-systems")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("listNiagaraSystems")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-niagara-system-summary")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getNiagaraSystemSummary")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-niagara-emitter-summary")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getNiagaraEmitterSummary")));
+
+	// Niagara tools (Tier 2: stack authoring)
+	Router->BindRoute(FHttpPath(TEXT("/api/add-niagara-module")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addNiagaraModule")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-niagara-renderer")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addNiagaraRenderer")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-module-input")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setModuleInput")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-system-module-input")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setSystemModuleInput")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-user-parameter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addUserParameter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-user-parameter-default")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setUserParameterDefault")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-module-library")), EHttpServerRequestVerbs::VERB_GET,
+		QueuedHandler(TEXT("listModuleLibrary")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-emitter-sim-target")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setEmitterSimTarget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-niagara-renderer")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeNiagaraRenderer")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-user-parameter")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeUserParameter")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-emitter-from-system")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeEmitterFromSystem")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-emitter-modules")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listEmitterModules")));
+	Router->BindRoute(FHttpPath(TEXT("/api/list-module-inputs")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listModuleInputs")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-renderer-property")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setRendererProperty")));
+
 	// Register TMap dispatch handlers
 	RegisterHandlers();
 
@@ -1048,16 +1092,23 @@ bool FBlueprintMCPServer::ProcessOneRequest()
 	FString Response;
 	if (FRequestHandler* Handler = HandlerMap.Find(Req->Endpoint))
 	{
-		// Wrap mutation endpoints in an undo transaction so users can Ctrl+Z
+		// Wrap mutation endpoints in an undo transaction so users can Ctrl+Z.
+		// CLAUDE-NOTE: widget mutations are excluded — recompiling a Widget Blueprint creates
+		// REINST_ objects whose WidgetTree refs in the transaction buffer keep the old World
+		// alive, giving a fatal "World Leak" crash. Widget tools use snapshot/restore instead.
 		const bool bIsMutation = MutationEndpoints.Contains(Req->Endpoint);
-		if (bIsMutation && GEditor)
+		const bool bIsWidgetMutation = WidgetMutationEndpoints.Contains(Req->Endpoint);
+		const bool bUseTransaction = bIsMutation && !bIsWidgetMutation && GEditor != nullptr;
+		if (bUseTransaction)
 		{
 			GEditor->BeginTransaction(FText::FromString(FString::Printf(TEXT("BlueprintMCP: %s"), *Req->Endpoint)));
 		}
 
 		Response = (*Handler)(Req->QueryParams, Req->Body);
 
-		if (bIsMutation && GEditor)
+		// CLAUDE-NOTE: must mirror bUseTransaction exactly — gating End on bIsMutation alone would
+		// call EndTransaction without a matching BeginTransaction for widget mutations.
+		if (bUseTransaction)
 		{
 			GEditor->EndTransaction();
 		}
@@ -1145,6 +1196,64 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("removeSkeletonSocket"),
 		TEXT("copySkeletonSockets"),
 		TEXT("rebuildGroomBindings"),
+		TEXT("attachActor"),
+		TEXT("detachActor"),
+		TEXT("duplicateActor"),
+		TEXT("renameActor"),
+		TEXT("setActorTags"),
+		TEXT("setViewportCamera"),
+		TEXT("setViewMode"),
+		TEXT("pieTeleportPlayer"),
+		TEXT("loadSublevel"),
+		TEXT("unloadSublevel"),
+		TEXT("saveAll"),
+		TEXT("setEditorSelection"),
+		TEXT("clearSelection"),
+		TEXT("setCVar"),
+		TEXT("clearOutputLog"),
+		TEXT("startPIE"),
+		TEXT("undo"),
+		TEXT("redo"),
+		TEXT("addWidget"),
+		TEXT("removeWidget"),
+		TEXT("setWidgetProperty"),
+		TEXT("moveWidget"),
+		TEXT("createWidgetBlueprint"),
+		// Level actor mutations
+		// CLAUDE-NOTE: these four were hyphenated on feature/describe-exposure-flags, but this set
+		// is matched against the DISPATCH KEY (see MutationEndpoints.Contains(Req->Endpoint)),
+		// which is camelCase — so the hyphenated spellings silently never matched and these
+		// mutations were never wrapped in an undo transaction. Corrected during the merge.
+		TEXT("setActorTransform"),
+		TEXT("setActorProperty"),
+		TEXT("spawnActor"),
+		TEXT("deleteActor"),
+		// Niagara mutations (Tier 1)
+		TEXT("createNiagaraSystem"),
+		TEXT("createNiagaraEmitter"),
+		TEXT("addEmitterToSystem"),
+		// Niagara mutations (Tier 2)
+		TEXT("addNiagaraModule"),
+		TEXT("addNiagaraRenderer"),
+		TEXT("setModuleInput"),
+		TEXT("addUserParameter"),
+		TEXT("setUserParameterDefault"),
+		TEXT("setEmitterSimTarget"),
+		TEXT("removeNiagaraRenderer"),
+		TEXT("removeUserParameter"),
+		TEXT("removeEmitterFromSystem"),
+		TEXT("setRendererProperty"),
+	};
+
+	// Widget mutations that must NOT be wrapped in undo transactions.
+	// Recompilation of Widget Blueprints creates REINST_ objects whose
+	// WidgetTree refs in the TransBuffer prevent World GC → fatal crash.
+	WidgetMutationEndpoints = {
+		TEXT("addWidget"),
+		TEXT("removeWidget"),
+		TEXT("setWidgetProperty"),
+		TEXT("moveWidget"),
+		TEXT("createWidgetBlueprint"),
 	};
 
 	// GET handlers (use QueryParams, ignore Body)
@@ -1352,6 +1461,41 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("spawnActor"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleSpawnActor(P, B); });
 	HandlerMap.Add(TEXT("undo"), [this](const TMap<FString, FString>&, const FString& B) { return HandleUndo(B); });
 	HandlerMap.Add(TEXT("unloadSublevel"), [this](const TMap<FString, FString>&, const FString& B) { return HandleUnloadSublevel(B); });
+	// Widget Blueprint handlers
+
+	// Niagara handlers (Tier 1)
+	HandlerMap.Add(TEXT("createNiagaraSystem"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateNiagaraSystem(B); });
+	HandlerMap.Add(TEXT("createNiagaraEmitter"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateNiagaraEmitter(B); });
+	HandlerMap.Add(TEXT("addEmitterToSystem"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleAddEmitterToSystem(B); });
+	HandlerMap.Add(TEXT("listNiagaraSystems"),         [this](const TMap<FString, FString>& P, const FString&) { return HandleListNiagaraSystems(P); });
+	HandlerMap.Add(TEXT("getNiagaraSystemSummary"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraSystemSummary(B); });
+	HandlerMap.Add(TEXT("getNiagaraEmitterSummary"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleGetNiagaraEmitterSummary(B); });
+
+	// Niagara handlers (Tier 2)
+	HandlerMap.Add(TEXT("addNiagaraModule"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraModule(B); });
+	HandlerMap.Add(TEXT("addNiagaraRenderer"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleAddNiagaraRenderer(B); });
+	HandlerMap.Add(TEXT("setModuleInput"),             [this](const TMap<FString, FString>&, const FString& B) { return HandleSetModuleInput(B); });
+	HandlerMap.Add(TEXT("setSystemModuleInput"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleSetSystemModuleInput(B); });
+	HandlerMap.Add(TEXT("addUserParameter"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleAddUserParameter(B); });
+	HandlerMap.Add(TEXT("setUserParameterDefault"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleSetUserParameterDefault(B); });
+	HandlerMap.Add(TEXT("listModuleLibrary"),          [this](const TMap<FString, FString>& P, const FString&) { return HandleListModuleLibrary(P); });
+	HandlerMap.Add(TEXT("setEmitterSimTarget"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleSetEmitterSimTarget(B); });
+	HandlerMap.Add(TEXT("removeNiagaraRenderer"),      [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveNiagaraRenderer(B); });
+	HandlerMap.Add(TEXT("removeUserParameter"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveUserParameter(B); });
+	HandlerMap.Add(TEXT("removeEmitterFromSystem"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveEmitterFromSystem(B); });
+	HandlerMap.Add(TEXT("listEmitterModules"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleListEmitterModules(B); });
+	HandlerMap.Add(TEXT("listModuleInputs"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleListModuleInputs(B); });
+	HandlerMap.Add(TEXT("setRendererProperty"),        [this](const TMap<FString, FString>&, const FString& B) { return HandleSetRendererProperty(B); });
+
+	// Level actor handlers
+	HandlerMap.Add(TEXT("current-level"),       [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
+	HandlerMap.Add(TEXT("list-actors"),         [this](const TMap<FString, FString>& P, const FString& B) { return HandleListActors(P, B); });
+	HandlerMap.Add(TEXT("actor-properties"),    [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetActorProperties(P, B); });
+	HandlerMap.Add(TEXT("selected-actors"),     [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetSelectedActors(P, B); });
+	HandlerMap.Add(TEXT("set-actor-transform"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleSetActorTransform(P, B); });
+	HandlerMap.Add(TEXT("set-actor-property"),  [this](const TMap<FString, FString>& P, const FString& B) { return HandleSetActorProperty(P, B); });
+	HandlerMap.Add(TEXT("spawn-actor"),         [this](const TMap<FString, FString>& P, const FString& B) { return HandleSpawnActor(P, B); });
+	HandlerMap.Add(TEXT("delete-actor"),        [this](const TMap<FString, FString>& P, const FString& B) { return HandleDeleteActor(P, B); });
 }
 
 // ============================================================
@@ -1578,6 +1722,15 @@ TSharedRef<FJsonObject> FBlueprintMCPServer::SerializeBlueprint(UBlueprint* BP)
 		VJ->SetBoolField(TEXT("isMap"), V.VarType.IsMap());
 		VJ->SetStringField(TEXT("category"), V.Category.ToString());
 		VJ->SetStringField(TEXT("defaultValue"), V.DefaultValue);
+		// CLAUDE-NOTE: Emit exposure flags from PropertyFlags so consumers can tell which
+		// variables are surfaced to external systems (e.g. disguise/RenderStream reads
+		// "Instance Editable" public properties). Mirrors the bit logic in HandleSetVariableMetadata.
+		// "Instance Editable" in the BP editor == CPF_Edit set AND CPF_DisableEditOnInstance clear.
+		const uint64 PropFlags = V.PropertyFlags;
+		VJ->SetBoolField(TEXT("instanceEditable"),
+			(PropFlags & CPF_Edit) != 0 && (PropFlags & CPF_DisableEditOnInstance) == 0);
+		VJ->SetBoolField(TEXT("exposeOnSpawn"), (PropFlags & CPF_ExposeOnSpawn) != 0);
+		VJ->SetBoolField(TEXT("blueprintReadOnly"), (PropFlags & CPF_BlueprintReadOnly) != 0);
 		Vars.Add(MakeShared<FJsonValueObject>(VJ));
 	}
 	J->SetArrayField(TEXT("variables"), Vars);
