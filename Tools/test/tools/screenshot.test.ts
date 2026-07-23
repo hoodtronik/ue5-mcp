@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("screenshot tools", () => {
+describeEditorOnly("screenshot tools", () => {
   describe("take_screenshot", () => {
     it("captures a screenshot with default filename", async () => {
       const data = await uePost("/api/take-screenshot", {});

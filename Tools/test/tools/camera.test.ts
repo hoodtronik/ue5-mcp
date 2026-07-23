@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("camera tools", () => {
+describeEditorOnly("camera tools", () => {
   describe("get_viewport_camera", () => {
     it("returns camera info without errors", async () => {
       const data = await uePost("/api/get-viewport-camera", {});

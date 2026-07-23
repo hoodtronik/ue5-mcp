@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("content browser tools", () => {
+describeEditorOnly("content browser tools", () => {
   describe("navigate_content_browser", () => {
     it("navigates to a valid path", async () => {
       const data = await uePost("/api/navigate-content-browser", {

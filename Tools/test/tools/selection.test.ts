@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("selection tools", () => {
+describeEditorOnly("selection tools", () => {
   describe("get_editor_selection", () => {
     it("returns selection without errors", async () => {
       const data = await uePost("/api/get-editor-selection", {});

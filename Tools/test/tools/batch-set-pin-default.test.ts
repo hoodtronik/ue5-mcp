@@ -109,7 +109,13 @@ describe("batch set_pin_default", () => {
 
     const pin1 = node1.pins?.find((p: any) => p.name === "InString");
     const pin2 = node2.pins?.find((p: any) => p.name === "InString");
-    if (pin1) expect(pin1.default).toBe("Persisted1");
-    if (pin2) expect(pin2.default).toBe("Persisted2");
+    // CLAUDE-NOTE: the serializer emits `defaultValue`, not `default` (BlueprintMCPServer.cpp
+    // SetStringField(TEXT("defaultValue"), Pin->DefaultValue)). This read the wrong key, so it
+    // asserted undefined !== "Persisted1" and failed. The pins are also asserted to exist now —
+    // the previous `if (pin) expect(...)` guard meant a missing pin silently passed.
+    expect(pin1).toBeDefined();
+    expect(pin2).toBeDefined();
+    expect(pin1.defaultValue).toBe("Persisted1");
+    expect(pin2.defaultValue).toBe("Persisted2");
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("spatial tools", () => {
+describeEditorOnly("spatial tools", () => {
   describe("raycast", () => {
     it("returns error for missing start field", async () => {
       const data = await uePost("/api/raycast", {

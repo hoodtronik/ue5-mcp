@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("undo/redo tools", () => {
+describeEditorOnly("undo/redo tools", () => {
   describe("undo", () => {
     it("returns appropriate response when nothing to undo", async () => {
       // In a fresh commandlet there may be nothing to undo

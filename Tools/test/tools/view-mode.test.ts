@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("view mode tools", () => {
+describeEditorOnly("view mode tools", () => {
   describe("set_view_mode", () => {
     it("sets view mode to Lit", async () => {
       const data = await uePost("/api/set-view-mode", { mode: "Lit" });

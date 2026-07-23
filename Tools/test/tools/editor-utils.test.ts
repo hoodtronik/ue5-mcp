@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("editor utility tools", () => {
+describeEditorOnly("editor utility tools", () => {
   describe("focus_actor", () => {
     it("returns error for missing actorLabel field", async () => {
       const data = await uePost("/api/focus-actor", {});

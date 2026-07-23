@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("sublevel tools", () => {
+describeEditorOnly("sublevel tools", () => {
   describe("get_level_info", () => {
     it("returns world information without errors", async () => {
       const data = await uePost("/api/get-level-info", {});

@@ -1,3 +1,4 @@
+import { describe } from "vitest";
 /**
  * helpers.ts — HTTP wrappers and fixture management for integration tests.
  */
@@ -162,3 +163,17 @@ export async function createTestAnimBlueprint(opts: {
     parentClass: opts.parentClass ?? "AnimInstance",
   });
 }
+
+// CLAUDE-NOTE: the suite runs a headless `-nullrhi` commandlet, which has no viewport, no PIE
+// session and no loaded map. Editor-only tools correctly refuse with "<tool> requires editor
+// mode.", so those tests can never pass here. They were FAILING rather than skipping, which
+// left a permanently red suite that people learn to ignore. Gate those suites with
+// `describeEditorOnly` so they report as skipped in commandlet mode and still run for anyone
+// pointing the tests at a live editor.
+const health = await ueGet("/api/health", {}).catch(() => null);
+
+/** True when the backend is a real editor rather than the headless test commandlet. */
+export const IS_EDITOR_MODE: boolean = health?.mode === "editor";
+
+/** `describe` that skips unless the backend is a full editor. */
+export const describeEditorOnly = IS_EDITOR_MODE ? describe : describe.skip;

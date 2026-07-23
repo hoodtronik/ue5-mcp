@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("PIE lifecycle tools", () => {
+describeEditorOnly("PIE lifecycle tools", () => {
   describe("is_pie_running", () => {
     it("reports PIE status without errors", async () => {
       const data = await uePost("/api/is-pie-running", {});

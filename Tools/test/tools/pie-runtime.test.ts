@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { uePost, describeEditorOnly} from "../helpers.js";
 
-describe("PIE runtime tools", () => {
+describeEditorOnly("PIE runtime tools", () => {
   // Note: These tests require an active PIE session.
   // They may fail in commandlet mode where PIE is not available.
 
