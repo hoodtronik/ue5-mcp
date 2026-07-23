@@ -144,6 +144,7 @@ private:
 	FString HandleDeleteNode(const FString& Body);
 	FString HandleDuplicateNodes(const FString& Body);
 	FString HandleAddNode(const FString& Body);
+	FString HandleBuildGraph(const FString& Body);
 	FString HandleRenameAsset(const FString& Body);
 
 	// ----- Validation (read-only, no save) -----

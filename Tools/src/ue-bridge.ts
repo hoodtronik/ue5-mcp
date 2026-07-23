@@ -22,7 +22,7 @@ export const state = {
 
 /**
  * Read the EngineAssociation field from the .uproject file.
- * Returns a short version string like "5.4" or "5.7", or null.
+ * Returns a short version string like "5.6", or null.
  */
 export function readEngineVersion(): string | null {
   const uproject = findUProject();
