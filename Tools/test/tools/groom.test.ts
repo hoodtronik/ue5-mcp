@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { uePost } from "../helpers.js";
+import { ueGet, uePost } from "../helpers.js";
 
 // CLAUDE-NOTE: rebuild_groom_bindings operates on UGroomBindingAsset, which needs real Groom +
 // Skeletal Mesh source data to build meaningfully — not something a headless test fixture can
@@ -50,5 +50,54 @@ describe("rebuild_groom_bindings", () => {
     expect(data.matched).toBe(0);
     expect(data.notFound).toContain("/Game/Test/GB_Nonexistent_XYZ_999");
     expect(data.saved).toEqual([]);
+  });
+});
+
+// CLAUDE-NOTE: list_groom_bindings, duplicate_groom_binding, and set_groom_binding_target_mesh
+// had zero test coverage before this — none of the three check bIsEditor, so unlike the tools
+// above they're fully exercisable headless. Only the fixture-requiring success paths (an actual
+// duplicate, an actual mesh swap) are out of reach for the same reason noted above.
+describe("list_groom_bindings", () => {
+  it("returns a well-formed response with no bindings in a fresh project", async () => {
+    const data = await ueGet("/api/list-groom-bindings", {});
+    expect(data.error).toBeUndefined();
+    expect(data.count).toBe(0);
+    expect(data.bindings).toEqual([]);
+  });
+
+  it("respects a query filter that matches nothing", async () => {
+    const data = await ueGet("/api/list-groom-bindings", { query: "NoSuchGroomBindingXYZ999" });
+    expect(data.error).toBeUndefined();
+    expect(data.count).toBe(0);
+  });
+});
+
+describe("duplicate_groom_binding", () => {
+  it("rejects missing assetPath/newName", async () => {
+    const data = await uePost("/api/duplicate-groom-binding", {});
+    expect(data.error).toBeDefined();
+  });
+
+  it("returns error for a non-existent source asset", async () => {
+    const data = await uePost("/api/duplicate-groom-binding", {
+      assetPath: "/Game/Test/GB_Nonexistent_XYZ_999",
+      newName: "GB_Copy",
+    });
+    expect(data.error).toBeDefined();
+  });
+});
+
+describe("set_groom_binding_target_mesh", () => {
+  it("rejects missing assetPath/targetMeshPath", async () => {
+    const data = await uePost("/api/set-groom-binding-target-mesh", {});
+    expect(data.error).toBeDefined();
+  });
+
+  it("returns error for a non-existent binding asset", async () => {
+    const data = await uePost("/api/set-groom-binding-target-mesh", {
+      assetPath: "/Game/Test/GB_Nonexistent_XYZ_999",
+      targetMeshPath: "/Game/Test/SKM_Nonexistent",
+    });
+    expect(data.error).toBeDefined();
   });
 });

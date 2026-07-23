@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { uePost, describeEditorOnly} from "../helpers.js";
+import { uePost, describeEditorOnly } from "../helpers.js";
 
-describeEditorOnly("editor utility tools", () => {
+describe("editor utility tools", () => {
   describe("focus_actor", () => {
     it("returns error for missing actorLabel field", async () => {
       const data = await uePost("/api/focus-actor", {});
@@ -23,7 +23,15 @@ describeEditorOnly("editor utility tools", () => {
       expect(data.error).toBeDefined();
       expect(data.error).toContain("message");
     });
+  });
+});
 
+// CLAUDE-NOTE: split from the block above — every handler here checks bIsEditor immediately after
+// field validation (BlueprintMCPHandlers_EditorUtils.cpp), so a success-path assertion needs a live
+// editor while a missing-field assertion gets a real error either way. save_all and
+// get_dirty_packages check bIsEditor before doing anything else, so they're editor-only outright.
+describeEditorOnly("editor utility tools (editor-only)", () => {
+  describe("editor_notification", () => {
     it("succeeds with valid message", async () => {
       const data = await uePost("/api/editor-notification", {
         message: "Test notification from MCP",
