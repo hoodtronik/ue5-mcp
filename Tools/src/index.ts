@@ -41,9 +41,14 @@ import { registerRunPythonTools } from "./tools/run-python.js";
 // CLAUDE-NOTE: merged back — Groom is this repo's own toolset (has C++ backing); the global server
 // sync didn't include it. Keep it alongside Niagara so no tools are lost.
 import { registerGroomTools } from "./tools/groom.js";
+import { registerPcgTools } from "./tools/pcg.js";
+import { registerPcgAuthoringTools } from "./tools/pcg-authoring.js";
 
 import { registerBlueprintListResource } from "./resources/blueprint-list.js";
 import { registerWorkflowRecipesResource } from "./resources/workflow-recipes.js";
+import { registerSkills } from "./skills/index.js";
+import { registerExamples } from "./examples/index.js";
+import { registerDiscoveryMode } from "./discovery/index.js";
 
 const server = new McpServer({ name: "blueprint-mcp", version: "1.0.0" });
 
@@ -84,9 +89,17 @@ registerLevelTools(server);
 registerNiagaraTools(server);
 registerRunPythonTools(server);
 registerGroomTools(server);
+registerPcgTools(server);
+registerPcgAuthoringTools(server);
 
 registerBlueprintListResource(server);
 registerWorkflowRecipesResource(server);
+registerSkills(server);
+registerExamples(server);
+
+// Opt-in (MCP_DISCOVERY_MODE=true). Must run LAST — after every tool is registered —
+// so the catalog sees them. No-op when the env var is unset (default behavior).
+registerDiscoveryMode(server);
 
 process.on("exit", () => { if (!state.editorMode) state.ueProcess?.kill(); });
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

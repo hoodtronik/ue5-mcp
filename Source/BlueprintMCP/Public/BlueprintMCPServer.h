@@ -253,6 +253,7 @@ private:
 	FString HandleConnectMaterialPins(const FString& Body);
 	FString HandleDisconnectMaterialPin(const FString& Body);
 	FString HandleSetExpressionValue(const FString& Body);
+	FString HandleSetMaterialScalarDefault(const FString& Body);
 	FString HandleMoveMaterialExpression(const FString& Body);
 
 	// ----- Material instance handlers (Phase 3) -----
@@ -279,6 +280,15 @@ private:
 
 	// ----- Python execution bridge -----
 	FString HandleRunPython(const FString& Body);
+
+	// ----- PCG graph authoring (user parameters + override-pin binding) -----
+	// CLAUDE-NOTE: implemented in BlueprintMCPHandlers_PCG.cpp; needed because the reflected Python API
+	// can't add graph user-parameters or wire override pins. Enables native parameter-driven PCG graphs.
+	FString HandlePcgAddUserParam(const FString& Body);
+	FString HandlePcgListUserParams(const FString& Body);
+	FString HandlePcgRemoveUserParam(const FString& Body);
+	FString HandlePcgSetUserParam(const FString& Body);
+	FString HandlePcgBindOverride(const FString& Body);
 
 	// ----- Groom Binding asset handlers -----
 	FString HandleListGroomBindings(const TMap<FString, FString>& Params);
@@ -362,6 +372,7 @@ private:
 	FString HandleRedo(const FString& Body);
 	FString HandleBeginTransaction(const FString& Body);
 	FString HandleEndTransaction(const FString& Body);
+	FString HandleResetTransactionBuffer(const FString& Body);
 	FString HandleFocusActor(const FString& Body);
 	FString HandleEditorNotification(const FString& Body);
 	FString HandleSaveAll(const FString& Body);

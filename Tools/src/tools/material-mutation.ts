@@ -8,6 +8,29 @@ export function registerMaterialMutationTools(server: McpServer): void {
   // ---------------------------------------------------------------------------
 
   server.tool(
+    "set_material_scalar_default",
+    "Set the DEFAULT value of a scalar parameter on a BASE Material, located by parameter name (recompiles + saves). This edits the master material's expression default — which the Python bridge cannot do (UMaterial's Expressions array is protected). For per-instance overrides use set_material_instance_parameter instead.",
+    {
+      material: z.string().describe("Material name or package path (e.g. 'M_CandySky')"),
+      parameterName: z.string().describe("Scalar parameter name to update (e.g. 'DriftSpeed')"),
+      value: z.number().describe("New default value for the scalar parameter"),
+    },
+    async ({ material, parameterName, value }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/set-material-scalar-default", { material, parameterName, value });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines = [
+        `Set scalar default '${data.parameterName}' on ${data.material}: ${data.oldValue} -> ${data.newValue}`,
+        `Saved: ${data.saved}`,
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  server.tool(
     "create_material",
     "Create a new Material asset.",
     {

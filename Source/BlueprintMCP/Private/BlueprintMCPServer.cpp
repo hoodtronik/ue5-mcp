@@ -734,6 +734,10 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("setExpressionValue")));
 	Router->BindRoute(FHttpPath(TEXT("/api/move-material-expression")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("moveMaterialExpression")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-material-scalar-default")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setMaterialScalarDefault")));
+	Router->BindRoute(FHttpPath(TEXT("/api/reset-transaction-buffer")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("resetTransactionBuffer")));
 
 	// Material instance tools (Phase 3)
 	Router->BindRoute(FHttpPath(TEXT("/api/create-material-instance")), EHttpServerRequestVerbs::VERB_POST,
@@ -823,6 +827,20 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	// incl. PCG) and returns captured output. Enables scripting features that have no dedicated tool.
 	Router->BindRoute(FHttpPath(TEXT("/api/run-python")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("runPython")));
+
+	// CLAUDE-NOTE: PCG graph authoring (graph user-parameters + override-pin binding) — see
+	// BlueprintMCPHandlers_PCG.cpp. Enables native parameter-driven PCG (e.g. a Blueprint driving
+	// per-mesh Count/Size on a scatter graph) which the reflected Python API can't author.
+	Router->BindRoute(FHttpPath(TEXT("/api/pcg-add-user-param")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pcgAddUserParam")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pcg-list-user-params")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pcgListUserParams")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pcg-remove-user-param")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pcgRemoveUserParam")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pcg-set-user-param")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pcgSetUserParam")));
+	Router->BindRoute(FHttpPath(TEXT("/api/pcg-bind-override")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("pcgBindOverride")));
 
 	// Viewport screenshots
 	Router->BindRoute(FHttpPath(TEXT("/api/take-screenshot")), EHttpServerRequestVerbs::VERB_POST,
@@ -976,6 +994,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("disconnectMaterialPin"),
 		TEXT("setExpressionValue"),
 		TEXT("moveMaterialExpression"),
+		TEXT("setMaterialScalarDefault"),
 		TEXT("createMaterialInstance"),
 		TEXT("setMaterialInstanceParameter"),
 		TEXT("reparentMaterialInstance"),
@@ -1087,6 +1106,8 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("disconnectMaterialPin"),   [this](const TMap<FString, FString>&, const FString& B) { return HandleDisconnectMaterialPin(B); });
 	HandlerMap.Add(TEXT("setExpressionValue"),      [this](const TMap<FString, FString>&, const FString& B) { return HandleSetExpressionValue(B); });
 	HandlerMap.Add(TEXT("moveMaterialExpression"),  [this](const TMap<FString, FString>&, const FString& B) { return HandleMoveMaterialExpression(B); });
+	HandlerMap.Add(TEXT("setMaterialScalarDefault"),[this](const TMap<FString, FString>&, const FString& B) { return HandleSetMaterialScalarDefault(B); });
+	HandlerMap.Add(TEXT("resetTransactionBuffer"),  [this](const TMap<FString, FString>&, const FString& B) { return HandleResetTransactionBuffer(B); });
 	HandlerMap.Add(TEXT("createMaterialInstance"),  [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateMaterialInstance(B); });
 	HandlerMap.Add(TEXT("setMaterialInstanceParameter"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetMaterialInstanceParameter(B); });
 	HandlerMap.Add(TEXT("reparentMaterialInstance"),[this](const TMap<FString, FString>&, const FString& B) { return HandleReparentMaterialInstance(B); });
@@ -1122,6 +1143,12 @@ void FBlueprintMCPServer::RegisterHandlers()
 	// Console command execution
 	HandlerMap.Add(TEXT("exec"),                    [this](const TMap<FString, FString>&, const FString& B) { return HandleExecCommand(B); });
 	HandlerMap.Add(TEXT("runPython"),               [this](const TMap<FString, FString>&, const FString& B) { return HandleRunPython(B); });
+	// PCG graph authoring (see BlueprintMCPHandlers_PCG.cpp)
+	HandlerMap.Add(TEXT("pcgAddUserParam"),         [this](const TMap<FString, FString>&, const FString& B) { return HandlePcgAddUserParam(B); });
+	HandlerMap.Add(TEXT("pcgListUserParams"),       [this](const TMap<FString, FString>&, const FString& B) { return HandlePcgListUserParams(B); });
+	HandlerMap.Add(TEXT("pcgRemoveUserParam"),      [this](const TMap<FString, FString>&, const FString& B) { return HandlePcgRemoveUserParam(B); });
+	HandlerMap.Add(TEXT("pcgSetUserParam"),         [this](const TMap<FString, FString>&, const FString& B) { return HandlePcgSetUserParam(B); });
+	HandlerMap.Add(TEXT("pcgBindOverride"),         [this](const TMap<FString, FString>&, const FString& B) { return HandlePcgBindOverride(B); });
 
 	// Viewport screenshots
 	HandlerMap.Add(TEXT("takeScreenshot"),          [this](const TMap<FString, FString>&, const FString& B) { return HandleTakeScreenshot(B); });
