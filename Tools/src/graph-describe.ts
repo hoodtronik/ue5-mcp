@@ -162,8 +162,11 @@ export function walkExecChain(startNodeId: string, nodeMap: NodeMap, visited: Se
   return lines;
 }
 
-/** Is this pin carrying zero information — no wire, and its value is the type's default? (#56) */
+/** Is this pin carrying zero information — no wire, and its value is the type's default? (#56)
+ * Exec/delegate pins have no "default value" concept and show control flow, not data — they're
+ * never empty regardless of connection state, or compacting would erase the exec chain entirely. */
 function isEmptyPin(pin: any): boolean {
+  if (pin.type === "exec" || pin.type === "delegate") return false;
   if (pin.connections?.length > 0) return false;
   const v = pin.defaultValue;
   return v === undefined || v === "" || v === "None" || v === "false" || v === "0" || v === "0.0";

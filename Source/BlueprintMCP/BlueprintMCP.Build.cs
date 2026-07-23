@@ -59,7 +59,12 @@ public class BlueprintMCP : ModuleRules
 			// CLAUDE-NOTE: added for GGameThreadTime/GRenderThreadTime/GRHIThreadTime
 			// (get_frame_timing — the scoped-down "profiling service" backlog item). Engine
 			// already pulls RenderCore in transitively; explicit for clarity.
-			"RenderCore"
+			"RenderCore",
+			// CLAUDE-NOTE: SGraphEditor came for free via UnrealEd (it's declared in
+			// UnrealEd/Public/GraphEditor.h), but SGraphPanel::Update() lives in the separate
+			// GraphEditor module and wasn't linkable without this — screenshot_graph (#65) needs it
+			// to force the panel to build its node widgets before an off-screen render.
+			"GraphEditor"
 		});
 	}
 }

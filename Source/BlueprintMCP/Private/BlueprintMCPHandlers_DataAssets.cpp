@@ -211,6 +211,10 @@ FString FBlueprintMCPServer::HandleCreateDataAsset(const FString& Body)
 	{
 		return MakeErrorJson(FString::Printf(TEXT("Class '%s' is not a UDataAsset subclass"), *DataAssetClassName), MCPErrorCodes::InvalidInput);
 	}
+	if (DataAssetClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Class '%s' is abstract and can't be instantiated directly — use a concrete subclass"), *DataAssetClassName), MCPErrorCodes::InvalidInput);
+	}
 
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	UDataAssetFactory* Factory = NewObject<UDataAssetFactory>();

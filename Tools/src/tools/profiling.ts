@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ensureUE, ueGet } from "../ue-bridge.js";
+import { ensureUE, uePost } from "../ue-bridge.js";
 
 // CLAUDE-NOTE: minimal frame-timing snapshot (scoped-down "performance/profiling service"
 // backlog item). Deliberately NOT a full profiling service — single-frame read of the engine's
@@ -14,7 +14,7 @@ export function registerProfilingTools(server: McpServer): void {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
-      const data = await ueGet("/api/get-frame-timing", {});
+      const data = await uePost("/api/get-frame-timing", {});
       if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
 
       const lines: string[] = [];

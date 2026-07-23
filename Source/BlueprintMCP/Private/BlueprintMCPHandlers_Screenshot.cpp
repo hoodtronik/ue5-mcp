@@ -222,8 +222,62 @@ namespace
 			.IsEditable(false)
 			.DisplayAsReadOnly(true);
 
+		// CLAUDE-NOTE: SGraphPanel only builds its child SGraphNode widgets reactively, in
+		// SGraphPanel::Update() — fired off the OnGraphChanged delegate or a Tick's deferred-update
+		// flag, never from Construct() itself. With no running Slate app tick loop driving this
+		// off-screen SVirtualWindow, Update() would never run on its own and the panel stays
+		// permanently empty (verified live: zoom/pan changed correctly but the canvas stayed blank
+		// with 0 node widgets). Force it explicitly before layout/paint.
+		if (SGraphPanel* GraphPanel = GraphEditorWidget->GetGraphPanel())
+		{
+			GraphPanel->Update();
+		}
+
 		GraphEditorWidget->SlatePrepass(1.0f);
-		GraphEditorWidget->ZoomToFit(/*bOnlySelection=*/false);
+
+		// CLAUDE-NOTE: SGraphPanel's ZoomToFit() only *schedules* the fit — it registers a Slate
+		// ActiveTimer that interpolates view offset/zoom across several real application ticks
+		// (SNodePanel::HandleZoomToFit). There's no window and no running Slate app tick loop here
+		// (FWidgetRenderer draws this SVirtualWindow exactly once with DeltaTime=0), so the timer
+		// never advances and the capture came out at the default 1:1 view showing nothing (verified
+		// live against a 6-node test graph). Compute the fit ourselves from node positions and set
+		// the view synchronously with SetViewLocation instead.
+		float MinX = TNumericLimits<float>::Max();
+		float MinY = TNumericLimits<float>::Max();
+		float MaxX = TNumericLimits<float>::Lowest();
+		float MaxY = TNumericLimits<float>::Lowest();
+		bool bHasNodes = false;
+		for (UEdGraphNode* Node : EdGraph->Nodes)
+		{
+			if (!Node)
+			{
+				continue;
+			}
+			bHasNodes = true;
+			MinX = FMath::Min(MinX, Node->GetNodePosX());
+			MinY = FMath::Min(MinY, Node->GetNodePosY());
+			// Real node widths aren't known until laid out; a generous minimum keeps single-node
+			// graphs from zooming in absurdly tight.
+			MaxX = FMath::Max(MaxX, Node->GetNodePosX() + FMath::Max(Node->GetWidth(), 250.0f));
+			MaxY = FMath::Max(MaxY, Node->GetNodePosY() + FMath::Max(Node->GetHeight(), 150.0f));
+		}
+
+		if (bHasNodes)
+		{
+			constexpr float Padding = 100.0f;
+			MinX -= Padding; MinY -= Padding; MaxX += Padding; MaxY += Padding;
+			const float BoundsWidth = FMath::Max(MaxX - MinX, 1.0f);
+			const float BoundsHeight = FMath::Max(MaxY - MinY, 1.0f);
+			const float FitZoom = FMath::Min((float)Width / BoundsWidth, (float)Height / BoundsHeight);
+			const float ZoomAmount = FMath::Clamp(FitZoom, 0.1f, 1.0f);
+			// CLAUDE-NOTE: SGraphEditor::GetViewLocation() returns GraphPanel->GetViewOffset()
+			// verbatim, and SGraphPanel::GraphCoordToPanelCoord() is (GraphCoord - ViewOffset) *
+			// Zoom — so "Location" is the graph-space coordinate that lands at the viewport's
+			// TOP-LEFT corner, not the center. Passing the bounds' center here (an earlier attempt)
+			// left the actual nodes off-screen to the bottom-right; verified live before landing on
+			// this fix. Pass the padded bounds' top-left instead.
+			GraphEditorWidget->SetViewLocation(FVector2D(MinX, MinY), ZoomAmount);
+		}
 
 		FWidgetRenderer Renderer(/*bUseGammaCorrection=*/true);
 		UTextureRenderTarget2D* RenderTarget = Renderer.DrawWidget(GraphEditorWidget, FVector2D(Width, Height));
