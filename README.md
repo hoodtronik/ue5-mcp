@@ -41,22 +41,37 @@ Driven via the `exec_command` tool. The Voxel Sandbox → StaticMesh baker adds:
 
 ## Tools
 
-The MCP server exposes the following tools, grouped by area.
+The MCP server exposes **228 tools**, grouped by area below. Every mutation tool supports a
+`dryRun` parameter where applicable and returns human-readable summaries with `nextSteps` hints.
 
 **Scripting / Python**
 - `run_python` — execute Unreal Editor Python and return captured output. Full reflected editor API
-  including the **PCG framework** (`unreal.PCGGraph`, `PCGComponent`, PCG node settings),
-  `EditorAssetLibrary`, `EditorActorSubsystem`, etc. The escape hatch for anything without a dedicated tool.
+  (`EditorAssetLibrary`, `EditorActorSubsystem`, the PCG framework, etc.). The escape hatch for
+  anything without a dedicated tool.
+- `discover_python_class` · `discover_python_search` — introspect the reflected Python API: dump a
+  class's methods/properties, or search across the API surface for a name.
+
+**Discovery / meta**
+- `list_skills` — list the built-in guided workflows (blueprints, materials, anim, niagara, pcg,
+  groom, mirror-tables, levels, sky) the server ships as MCP resources.
+- `list_examples` — list runnable end-to-end example recipes (e.g. create a blueprint component,
+  spawn a static mesh, build a PCG scatter graph).
+- Opt-in catalog mode (`MCP_DISCOVERY_MODE=true`) adds `list_tool_categories` · `describe_category`
+  · `search_tools` for browsing the tool set instead of registering all 228 up front.
 
 **Blueprints — read**
 - `list_blueprints` · `get_blueprint` · `get_blueprint_summary` · `get_blueprint_graph` · `describe_graph`
   · `search_blueprints` · `search_by_type` · `find_asset_references`
 
-**Blueprints — mutate**
+**Blueprints — graph mutation**
 - `create_blueprint` · `reparent_blueprint` · `create_graph` · `delete_graph` · `rename_graph`
 - `add_node` · `delete_node` · `move_node` · `duplicate_nodes` · `connect_pins` · `disconnect_pin`
   · `set_pin_default` · `refresh_all_nodes` · `replace_function_calls` · `change_struct_node_type`
   · `get_node_comment` · `set_node_comment`
+- `build_graph` — construct or extend an entire event graph (nodes + wiring) in one batched call.
+- `screenshot_graph` — render a Blueprint graph to a PNG image for visual inspection.
+
+**Blueprints — members**
 - `add_variable` · `remove_variable` · `change_variable_type` · `set_variable_metadata` · `set_blueprint_default`
 - `add_function_parameter` · `remove_function_parameter` · `change_function_parameter_type`
 - `add_interface` · `remove_interface` · `list_interfaces`
@@ -67,8 +82,10 @@ The MCP server exposes the following tools, grouped by area.
 **Discovery / reflection**
 - `list_classes` · `list_functions` · `list_properties` · `get_pin_info` · `check_pin_compatibility`
 
-**Structs / enums**
+**Structs / enums / data assets**
 - `create_struct` · `add_struct_property` · `remove_struct_property` · `create_enum`
+- `create_data_asset` · `create_data_table` · `create_curve_table`
+- Mirror tables: `list_mirror_table_rows` · `set_mirror_table_rows` · `remove_mirror_table_rows`
 
 **Validation / graph snapshots**
 - `validate_blueprint` · `validate_all_blueprints` · `diff_blueprints`
@@ -79,8 +96,8 @@ The MCP server exposes the following tools, grouped by area.
   · `find_material_references` · `list_material_functions` · `get_material_function`
 - `create_material` · `set_material_property` · `add_material_expression` · `delete_material_expression`
   · `move_material_expression` · `connect_material_pins` · `disconnect_material_pin` · `set_expression_value`
-  · `create_material_function` · `validate_material` · `snapshot_material_graph` · `diff_material_graph`
-  · `restore_material_graph`
+  · `set_material_scalar_default` · `create_material_function` · `validate_material`
+  · `snapshot_material_graph` · `diff_material_graph` · `restore_material_graph`
 - `create_material_instance` · `set_material_instance_parameter` · `get_material_instance_parameters`
   · `reparent_material_instance`
 
@@ -90,6 +107,9 @@ The MCP server exposes the following tools, grouped by area.
   · `create_blend_space` · `set_blend_space_samples` · `set_state_blend_space` · `list_anim_slots`
   · `list_sync_groups`
 
+**Skeletons**
+- `get_skeleton` · `add_skeleton_socket` · `remove_skeleton_socket` · `copy_skeleton_sockets`
+
 **Niagara**
 - `create_niagara_system` · `create_niagara_emitter` · `add_emitter_to_system` · `remove_emitter_from_system`
   · `list_niagara_systems` · `get_niagara_system_summary` · `get_niagara_emitter_summary`
@@ -98,31 +118,41 @@ The MCP server exposes the following tools, grouped by area.
   · `set_module_input` · `set_system_module_input` · `add_user_parameter` · `remove_user_parameter`
   · `set_user_parameter_default`
 
+**PCG (Procedural Content Generation)**
+- `create_pcg_graph` · `get_pcg_graph` · `list_pcg_graphs` · `list_pcg_nodes` · `add_pcg_node`
+  · `connect_pcg_nodes` · `delete_pcg_node` · `set_pcg_node_property` · `execute_pcg_graph`
+- User parameters: `pcg_add_user_param` · `pcg_set_user_param` · `pcg_list_user_params`
+  · `pcg_remove_user_param` · `pcg_bind_override`
+
 **Widgets (UMG)**
 - `create_widget_blueprint` · `list_widget_tree` · `get_widget_properties` · `add_widget` · `remove_widget`
-  · `set_widget_property` · `move_widget`
+  · `set_widget_property` · `move_widget` · `bind_widget_event`
 
-**Groom** — `create_groom_binding` and related grooming tools.
+**Groom**
+- `list_groom_bindings` · `duplicate_groom_binding` · `rebuild_groom_bindings` · `set_groom_binding_target_mesh`
 
 **Levels / actors**
 - `get_current_level` · `get_level_info` · `list_actors` · `get_selected_actors` · `get_actor_properties`
   · `spawn_actor` · `delete_actor` · `duplicate_actor` · `rename_actor` · `attach_actor` · `detach_actor`
-  · `set_actor_transform` · `set_actor_property`
-- `find_actors_by_class` · `find_actors_by_tag` · `find_actors_in_radius` · `get_actor_bounds` · `set_actor_tags`
-- `set_actor_mobility` · `set_actor_visibility` · `set_actor_physics`
-- `attach_actor` · `focus_actor` · `raycast`
+  · `set_actor_transform` · `set_actor_property` · `set_actor_mobility` · `set_actor_visibility`
+  · `set_actor_physics` · `set_actor_tags`
+- `find_actors_by_class` · `find_actors_by_tag` · `find_actors_in_radius` · `get_actor_bounds`
+  · `focus_actor` · `raycast`
 - Sublevels: `list_sublevels` · `load_sublevel` · `unload_sublevel`
 - Selection: `get_editor_selection` · `set_editor_selection` · `clear_selection`
 
 **Editor / viewport**
 - `server_status` · `rescan_assets` · `exec_command` · `shutdown_server` · `editor_notification`
+  · `refresh_agent_config`
 - `save_all` · `get_dirty_packages` · `undo` · `redo` · `begin_transaction` · `end_transaction`
+  · `reset_transaction_buffer`
 - `navigate_content_browser` · `open_asset_editor`
 - Camera: `get_viewport_camera` · `set_viewport_camera`
 - View: `set_view_mode` · `set_show_flags` · `set_viewport_type` · `set_realtime_rendering` · `set_game_view`
 - Screenshots: `take_screenshot` · `take_high_res_screenshot`
 - Output log: `get_output_log` · `clear_output_log`
 - CVars: `get_cvar` · `set_cvar` · `list_cvars`
+- Profiling: `get_frame_timing`
 
 **Play In Editor (PIE)**
 - `start_pie` · `stop_pie` · `pie_pause` · `is_pie_running`
