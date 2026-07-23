@@ -14,17 +14,10 @@ const SERVER_CPP = path.resolve(
 
 const ROUTE_RE = /\/api\/[a-zA-Z0-9-]+/g;
 
-// CLAUDE-NOTE: routes with real, implemented C++ handlers but no TS caller yet. /api/test-save is
-// an intentional diagnostic-only endpoint (see BlueprintMCPHandlers_Read.cpp: "load a Blueprint and
-// save it unmodified"). The other four are a genuine coverage gap — tracked as open-work item in
-// memory (blueprint-mcp-open-work) rather than silently left unflagged.
-const KNOWN_ORPHAN_CPP_ROUTES = new Set([
-  "/api/test-save",
-  "/api/rebuild-groom-bindings",
-  "/api/list-mirror-table-rows",
-  "/api/set-mirror-table-rows",
-  "/api/remove-mirror-table-rows",
-]);
+// CLAUDE-NOTE: /api/test-save is an intentional diagnostic-only endpoint with no MCP tool wrapper
+// (see BlueprintMCPHandlers_Read.cpp: "load a Blueprint and save it unmodified") — everything else
+// is expected to have a TS caller.
+const KNOWN_ORPHAN_CPP_ROUTES = new Set(["/api/test-save"]);
 
 function walkTsFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

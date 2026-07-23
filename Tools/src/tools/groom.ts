@@ -150,4 +150,84 @@ export function registerGroomTools(server: McpServer): void {
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );
+
+  // ------------------------------------------------------------------
+  // rebuild_groom_bindings
+  // ------------------------------------------------------------------
+  server.tool(
+    "rebuild_groom_bindings",
+    "Rebuild one or more Groom Binding assets' baked binding data — needed after retargeting a " +
+    "binding to a new skeletal mesh (see set_groom_binding_target_mesh) or after the source groom " +
+    "asset changes. Select targets via 'assetPath' (single), 'assetPaths' (array), or 'query' " +
+    "(name substring) — at least one is required. Optionally reassigns the groom/target/source mesh " +
+    "before rebuilding. Use dryRun to preview which bindings would be touched without building or saving.",
+    {
+      assetPath: z.string().optional().describe(
+        "Full asset path or package path of a single groom binding to rebuild"
+      ),
+      assetPaths: z.array(z.string()).optional().describe(
+        "Multiple groom binding asset paths to rebuild in one call"
+      ),
+      query: z.string().optional().describe(
+        "Rebuild every groom binding whose name contains this substring (case-insensitive)"
+      ),
+      targetMeshPath: z.string().optional().describe(
+        "Optional Skeletal Mesh path to assign as the target mesh on every matched binding before rebuilding"
+      ),
+      sourceMeshPath: z.string().optional().describe(
+        "Optional Skeletal Mesh path to assign as the source mesh on every matched binding before rebuilding"
+      ),
+      groomPath: z.string().optional().describe(
+        "Optional Groom asset path to assign on every matched binding before rebuilding"
+      ),
+      autoDetectGroom: z.boolean().optional().describe(
+        "If true and a matched binding has no groom set, attempt to derive one from the binding's asset path"
+      ),
+      dryRun: z.boolean().optional().describe(
+        "If true, report which bindings would be rebuilt without building or saving anything"
+      ),
+    },
+    async ({ assetPath, assetPaths, query, targetMeshPath, sourceMeshPath, groomPath, autoDetectGroom, dryRun }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const body: Record<string, any> = {};
+      if (assetPath) body.assetPath = assetPath;
+      if (assetPaths) body.assetPaths = assetPaths;
+      if (query) body.query = query;
+      if (targetMeshPath) body.targetMeshPath = targetMeshPath;
+      if (sourceMeshPath) body.sourceMeshPath = sourceMeshPath;
+      if (groomPath) body.groomPath = groomPath;
+      if (autoDetectGroom !== undefined) body.autoDetectGroom = autoDetectGroom;
+      if (dryRun !== undefined) body.dryRun = dryRun;
+
+      const data = await uePost("/api/rebuild-groom-bindings", body);
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(data.dryRun ? `Dry run — ${data.matched} binding(s) matched:` : `Rebuilt ${data.matched} binding(s):`);
+      for (const name of data.rebuilt ?? []) lines.push(`  ${name}`);
+
+      if (data.notFound?.length) {
+        lines.push(`\nNot found:`);
+        for (const n of data.notFound) lines.push(`  ${n}`);
+      }
+      if (data.buildFailed?.length) {
+        lines.push(`\nBuild failed:`);
+        for (const n of data.buildFailed) lines.push(`  ${n}`);
+      }
+      if (data.saveFailed?.length) {
+        lines.push(`\nSave failed:`);
+        for (const n of data.saveFailed) lines.push(`  ${n}`);
+      }
+      if (data.groomNotFound?.length) {
+        lines.push(`\nGroom not found (auto-detect):`);
+        for (const n of data.groomNotFound) lines.push(`  ${n}`);
+      }
+      if (!data.dryRun) lines.push(`\nSaved: ${data.saved?.length ?? 0}/${data.matched}`);
+      lines.push(`\nSuccess: ${data.success}`);
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
 }
