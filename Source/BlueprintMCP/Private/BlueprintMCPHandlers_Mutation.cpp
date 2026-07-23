@@ -17,6 +17,7 @@
 #include "K2Node_EditablePinBase.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
+#include "K2Node_CallDelegate.h"
 #include "K2Node_BreakStruct.h"
 #include "K2Node_MakeStruct.h"
 #include "K2Node_DynamicCast.h"
@@ -1558,40 +1559,74 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 		{
 			return MakeErrorJson(TEXT("Missing required field 'variableName' for VariableGet/VariableSet"));
 		}
-
-		// Verify the variable exists in the blueprint
 		FName VarFName(*VariableName);
-		bool bVarFound = false;
-		for (const FBPVariableDescription& Var : BP->NewVariables)
+
+		// CLAUDE-NOTE: optional 'className' targets a property on an EXTERNAL class instead of a
+		// member of this Blueprint (github.com/mirno-ehf/ue5-mcp#67 — "Cross-Blueprint property
+		// access"). SetExternalMember (vs SetSelfMember) leaves a 'self'/Target input pin exposed
+		// on the created node for the caller to wire to a cast output or object reference.
+		FString ExternalClassName = Json->GetStringField(TEXT("className"));
+		UClass* ExternalClass = nullptr;
+		if (!ExternalClassName.IsEmpty())
 		{
-			if (Var.VarName == VarFName)
+			for (TObjectIterator<UClass> It; It; ++It)
 			{
-				bVarFound = true;
-				break;
+				FString ClassName = It->GetName();
+				if (ClassName == ExternalClassName || ClassName == ExternalClassName + TEXT("_C"))
+				{
+					ExternalClass = *It;
+					break;
+				}
+			}
+			if (!ExternalClass)
+			{
+				return MakeErrorJson(FString::Printf(TEXT("Class '%s' not found"), *ExternalClassName), MCPErrorCodes::NotFound);
+			}
+			FProperty* Prop = ExternalClass->FindPropertyByName(VarFName);
+			if (!Prop)
+			{
+				return MakeErrorJson(FString::Printf(TEXT("Variable '%s' not found on class '%s'"),
+					*VariableName, *ExternalClassName), MCPErrorCodes::NotFound);
 			}
 		}
-
-		if (!bVarFound)
+		else
 		{
-			// Also check inherited properties
-			if (BP->GeneratedClass)
+			// Verify the variable exists in the blueprint
+			bool bVarFound = false;
+			for (const FBPVariableDescription& Var : BP->NewVariables)
 			{
-				FProperty* Prop = BP->GeneratedClass->FindPropertyByName(VarFName);
-				if (Prop)
+				if (Var.VarName == VarFName)
+				{
 					bVarFound = true;
+					break;
+				}
 			}
-		}
 
-		if (!bVarFound)
-		{
-			return MakeErrorJson(FString::Printf(TEXT("Variable '%s' not found in Blueprint '%s'"),
-				*VariableName, *BlueprintName));
+			if (!bVarFound)
+			{
+				// Also check inherited properties
+				if (BP->GeneratedClass)
+				{
+					FProperty* Prop = BP->GeneratedClass->FindPropertyByName(VarFName);
+					if (Prop)
+						bVarFound = true;
+				}
+			}
+
+			if (!bVarFound)
+			{
+				return MakeErrorJson(FString::Printf(TEXT("Variable '%s' not found in Blueprint '%s'"),
+					*VariableName, *BlueprintName));
+			}
 		}
 
 		if (NodeType == TEXT("VariableGet"))
 		{
 			UK2Node_VariableGet* GetNode = NewObject<UK2Node_VariableGet>(TargetGraph);
-			GetNode->VariableReference.SetSelfMember(VarFName);
+			if (ExternalClass)
+				GetNode->VariableReference.SetExternalMember(VarFName, ExternalClass);
+			else
+				GetNode->VariableReference.SetSelfMember(VarFName);
 			GetNode->NodePosX = PosX;
 			GetNode->NodePosY = PosY;
 			TargetGraph->AddNode(GetNode, false, false);
@@ -1601,13 +1636,49 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 		else
 		{
 			UK2Node_VariableSet* SetNode = NewObject<UK2Node_VariableSet>(TargetGraph);
-			SetNode->VariableReference.SetSelfMember(VarFName);
+			if (ExternalClass)
+				SetNode->VariableReference.SetExternalMember(VarFName, ExternalClass);
+			else
+				SetNode->VariableReference.SetSelfMember(VarFName);
 			SetNode->NodePosX = PosX;
 			SetNode->NodePosY = PosY;
 			TargetGraph->AddNode(SetNode, false, false);
 			SetNode->AllocateDefaultPins();
 			NewNode = SetNode;
 		}
+	}
+	else if (NodeType == TEXT("CallDispatcher"))
+	{
+		// CLAUDE-NOTE: broadcasts an event dispatcher (multicast delegate) from within the same
+		// Blueprint (github.com/mirno-ehf/ue5-mcp#63). Distinct from CallFunction — dispatcher
+		// broadcasts compile through UK2Node_CallDelegate, not a function-call node.
+		FString DispatcherName = Json->GetStringField(TEXT("dispatcherName"));
+		if (DispatcherName.IsEmpty())
+		{
+			return MakeErrorJson(TEXT("Missing required field 'dispatcherName' for CallDispatcher"), MCPErrorCodes::InvalidInput);
+		}
+		FName DispatcherFName(*DispatcherName);
+
+		if (!BP->GeneratedClass)
+		{
+			return MakeErrorJson(TEXT("Blueprint has no generated class — compile/save it first"), MCPErrorCodes::OperationFailed);
+		}
+		FMulticastDelegateProperty* DelegateProp = CastField<FMulticastDelegateProperty>(
+			BP->GeneratedClass->FindPropertyByName(DispatcherFName));
+		if (!DelegateProp)
+		{
+			return MakeErrorJson(FString::Printf(
+				TEXT("Event dispatcher '%s' not found on Blueprint '%s'. Use add_event_dispatcher first."),
+				*DispatcherName, *BlueprintName), MCPErrorCodes::NotFound);
+		}
+
+		UK2Node_CallDelegate* CallNode = NewObject<UK2Node_CallDelegate>(TargetGraph);
+		CallNode->SetFromProperty(DelegateProp, /*bSelfContext=*/true, BP->GeneratedClass);
+		CallNode->NodePosX = PosX;
+		CallNode->NodePosY = PosY;
+		TargetGraph->AddNode(CallNode, false, false);
+		CallNode->AllocateDefaultPins();
+		NewNode = CallNode;
 	}
 	else if (NodeType == TEXT("DynamicCast"))
 	{
@@ -1917,7 +1988,7 @@ FString FBlueprintMCPServer::HandleAddNode(const FString& Body)
 	else
 	{
 		return MakeErrorJson(FString::Printf(
-			TEXT("Unsupported nodeType '%s'. Supported: BreakStruct, MakeStruct, CallFunction, VariableGet, VariableSet, DynamicCast, OverrideEvent, CallParentFunction, Branch, Sequence, CustomEvent, ForEachLoop, ForLoop, ForLoopWithBreak, WhileLoop, SpawnActorFromClass, Select, Comment, Reroute"),
+			TEXT("Unsupported nodeType '%s'. Supported: BreakStruct, MakeStruct, CallFunction, VariableGet, VariableSet, DynamicCast, OverrideEvent, CallParentFunction, CallDispatcher, Branch, Sequence, CustomEvent, ForEachLoop, ForLoop, ForLoopWithBreak, WhileLoop, SpawnActorFromClass, Select, Comment, Reroute"),
 			*NodeType));
 	}
 

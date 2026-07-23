@@ -355,21 +355,26 @@ export function registerMutationTools(server: McpServer): void {
 
   server.tool(
     "add_node",
-    "Add a new node to a Blueprint graph. Supports: BreakStruct, MakeStruct, CallFunction, VariableGet, VariableSet, DynamicCast, OverrideEvent, CallParentFunction, Branch, Sequence, CustomEvent, ForEachLoop, ForLoop, ForLoopWithBreak, WhileLoop, SpawnActorFromClass, Select, Comment, Reroute. For Delay/IsValid/PrintString, use CallFunction with className 'KismetSystemLibrary'.",
+    "Add a new node to a Blueprint graph. Supports: BreakStruct, MakeStruct, CallFunction, VariableGet, VariableSet, DynamicCast, OverrideEvent, CallParentFunction, CallDispatcher, Branch, Sequence, CustomEvent, ForEachLoop, ForLoop, ForLoopWithBreak, WhileLoop, SpawnActorFromClass, Select, Comment, Reroute. For Delay/IsValid/PrintString, use CallFunction with className 'KismetSystemLibrary'.",
     {
       blueprint: z.string().describe("Blueprint name or package path"),
       graph: z.string().describe("Graph name (e.g. 'EventGraph')"),
       nodeType: z.enum([
         "BreakStruct", "MakeStruct", "CallFunction", "VariableGet", "VariableSet",
-        "DynamicCast", "OverrideEvent", "CallParentFunction",
+        "DynamicCast", "OverrideEvent", "CallParentFunction", "CallDispatcher",
         "Branch", "Sequence", "CustomEvent",
         "ForEachLoop", "ForLoop", "ForLoopWithBreak", "WhileLoop",
         "SpawnActorFromClass", "Select", "Comment", "Reroute"
       ]).describe("Type of node to add"),
       typeName: z.string().optional().describe("Struct type name for BreakStruct/MakeStruct (e.g. 'FVitals')"),
       functionName: z.string().optional().describe("Function name for CallFunction, OverrideEvent, or CallParentFunction (e.g. 'PrintString')"),
-      className: z.string().optional().describe("Class name for CallFunction (e.g. 'KismetSystemLibrary')"),
+      className: z.string().optional().describe(
+        "Class name for CallFunction (e.g. 'KismetSystemLibrary'). Also usable on VariableGet/VariableSet " +
+        "to target a property on an EXTERNAL class instead of a member of this Blueprint — the created node " +
+        "gets an exposed 'Target'/self pin to wire to a cast output or object reference."
+      ),
       variableName: z.string().optional().describe("Variable name for VariableGet/VariableSet"),
+      dispatcherName: z.string().optional().describe("Event dispatcher name for CallDispatcher — broadcasts an existing dispatcher on this Blueprint (add it first with add_event_dispatcher)"),
       castTarget: z.string().optional().describe("Target class name for DynamicCast (e.g. 'BP_PatientJson')"),
       eventName: z.string().optional().describe("Event name for CustomEvent (e.g. 'OnDataReady')"),
       actorClass: z.string().optional().describe("Actor class for SpawnActorFromClass (e.g. 'BP_Patient_Base'). Optional — can also be set via the class pin."),
@@ -379,7 +384,7 @@ export function registerMutationTools(server: McpServer): void {
       posX: z.number().optional().describe("X position in the graph (optional)"),
       posY: z.number().optional().describe("Y position in the graph (optional)"),
     },
-    async ({ blueprint, graph, nodeType, typeName, functionName, className, variableName, castTarget, eventName, actorClass, comment, width, height, posX, posY }) => {
+    async ({ blueprint, graph, nodeType, typeName, functionName, className, variableName, dispatcherName, castTarget, eventName, actorClass, comment, width, height, posX, posY }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
@@ -388,6 +393,7 @@ export function registerMutationTools(server: McpServer): void {
       if (functionName) body.functionName = functionName;
       if (className) body.className = className;
       if (variableName) body.variableName = variableName;
+      if (dispatcherName) body.dispatcherName = dispatcherName;
       if (castTarget) body.castTarget = castTarget;
       if (eventName) body.eventName = eventName;
       if (actorClass) body.actorClass = actorClass;

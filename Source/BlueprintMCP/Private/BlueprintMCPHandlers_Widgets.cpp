@@ -38,6 +38,9 @@
 #include "UObject/SavePackage.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Misc/PackageName.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "EdGraph/EdGraph.h"
 
 // ============================================================
 // LoadWidgetBlueprintByName — load and cast to UWidgetBlueprint
@@ -928,6 +931,127 @@ FString FBlueprintMCPServer::HandleCreateWidgetBlueprint(const FString& Body)
 	Result->SetStringField(TEXT("packagePath"), PackagePath);
 	Result->SetStringField(TEXT("fullPath"), FullPath);
 	Result->SetStringField(TEXT("class"), TEXT("WidgetBlueprint"));
+	Result->SetBoolField(TEXT("saved"), bSaved);
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleBindWidgetEvent — bind a named widget's event (e.g. Button.OnClicked) into the graph
+// ============================================================
+// CLAUDE-NOTE: github.com/mirno-ehf/ue5-mcp#16 ("bind_widget_event" was the one widget-support
+// gap left after list/add/remove/set_property/create shipped). Uses
+// FKismetEditorUtilities::CreateNewBoundEventForClass — the exact same UnrealEd API the Details
+// panel's "+" next to an event uses — rather than hand-building a UK2Node_ComponentBoundEvent,
+// since that node also needs RegisterDynamicBinding wiring that the canonical helper already does.
+
+FString FBlueprintMCPServer::HandleBindWidgetEvent(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body"));
+	}
+
+	FString BlueprintName = Json->GetStringField(TEXT("blueprint"));
+	FString WidgetName = Json->GetStringField(TEXT("widgetName"));
+	FString EventName = Json->GetStringField(TEXT("eventName"));
+	if (BlueprintName.IsEmpty() || WidgetName.IsEmpty() || EventName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required fields: blueprint, widgetName, eventName (e.g. widgetName='MyButton', eventName='OnClicked')"), MCPErrorCodes::InvalidInput);
+	}
+
+	FString LoadError;
+	UWidgetBlueprint* WidgetBP = LoadWidgetBlueprintByName(BlueprintName, LoadError);
+	if (!WidgetBP)
+	{
+		return MakeErrorJson(LoadError);
+	}
+
+	if (!WidgetBP->GeneratedClass)
+	{
+		return MakeErrorJson(TEXT("Widget Blueprint has no generated class — compile/save it first"));
+	}
+
+	FObjectProperty* ComponentProperty = FindFProperty<FObjectProperty>(WidgetBP->GeneratedClass, FName(*WidgetName));
+	if (!ComponentProperty)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Widget '%s' not found as a variable on '%s'. Only widgets with 'Is Variable' enabled (the default) can be bound — check list_widget_tree for the widget's name."),
+			*WidgetName, *BlueprintName), MCPErrorCodes::NotFound);
+	}
+
+	UClass* WidgetClass = ComponentProperty->PropertyClass;
+	if (!WidgetClass)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("'%s' is not a widget-typed variable"), *WidgetName), MCPErrorCodes::InvalidInput);
+	}
+
+	FMulticastDelegateProperty* DelegateProperty = FindFProperty<FMulticastDelegateProperty>(WidgetClass, FName(*EventName));
+	if (!DelegateProperty)
+	{
+		return MakeErrorJson(FString::Printf(
+			TEXT("Event '%s' not found on widget class '%s'. Common events: OnClicked (Button), OnCheckStateChanged (CheckBox), OnTextChanged/OnTextCommitted (EditableTextBox)."),
+			*EventName, *WidgetClass->GetName()), MCPErrorCodes::NotFound);
+	}
+
+	UEdGraph* TargetGraph = WidgetBP->GetLastEditedUberGraph();
+	if (!TargetGraph)
+	{
+		return MakeErrorJson(TEXT("Widget Blueprint has no event graph"), MCPErrorCodes::OperationFailed);
+	}
+
+	// Already bound? Return the existing node instead of creating a duplicate.
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
+	{
+		if (UK2Node_ComponentBoundEvent* Existing = Cast<UK2Node_ComponentBoundEvent>(Node))
+		{
+			if (Existing->GetComponentPropertyName() == ComponentProperty->GetFName() &&
+				Existing->DelegatePropertyName == DelegateProperty->GetFName())
+			{
+				TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+				Result->SetBoolField(TEXT("success"), true);
+				Result->SetBoolField(TEXT("alreadyExists"), true);
+				Result->SetStringField(TEXT("nodeId"), Existing->NodeGuid.ToString());
+				Result->SetStringField(TEXT("widgetName"), WidgetName);
+				Result->SetStringField(TEXT("eventName"), EventName);
+				return JsonToString(Result);
+			}
+		}
+	}
+
+	FKismetEditorUtilities::CreateNewBoundEventForClass(WidgetClass, DelegateProperty->GetFName(), WidgetBP, ComponentProperty);
+
+	// CreateNewBoundEventForClass doesn't hand back the node it created, so find it by the
+	// (component, delegate) pair we just bound.
+	UK2Node_ComponentBoundEvent* NewNode = nullptr;
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
+	{
+		if (UK2Node_ComponentBoundEvent* Candidate = Cast<UK2Node_ComponentBoundEvent>(Node))
+		{
+			if (Candidate->GetComponentPropertyName() == ComponentProperty->GetFName() &&
+				Candidate->DelegatePropertyName == DelegateProperty->GetFName())
+			{
+				NewNode = Candidate;
+				break;
+			}
+		}
+	}
+	if (!NewNode)
+	{
+		return MakeErrorJson(TEXT("Failed to create the event binding node"), MCPErrorCodes::OperationFailed);
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
+	bool bSaved = SaveBlueprintPackage(WidgetBP);
+
+	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: Bound %s.%s on '%s', save %s"),
+		*WidgetName, *EventName, *BlueprintName, bSaved ? TEXT("true") : TEXT("false"));
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("nodeId"), NewNode->NodeGuid.ToString());
+	Result->SetStringField(TEXT("widgetName"), WidgetName);
+	Result->SetStringField(TEXT("eventName"), EventName);
 	Result->SetBoolField(TEXT("saved"), bSaved);
 	return JsonToString(Result);
 }

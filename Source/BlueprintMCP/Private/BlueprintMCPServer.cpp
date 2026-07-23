@@ -1,4 +1,5 @@
 #include "BlueprintMCPServer.h"
+#include "SourceControlHelpers.h"
 #include "Materials/MaterialExpression.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -208,6 +209,14 @@ FString FBlueprintMCPServer::MakeErrorJson(const FString& Message)
 {
 	TSharedRef<FJsonObject> E = MakeShared<FJsonObject>();
 	E->SetStringField(TEXT("error"), Message);
+	return JsonToString(E);
+}
+
+FString FBlueprintMCPServer::MakeErrorJson(const FString& Message, const FString& ErrorCode)
+{
+	TSharedRef<FJsonObject> E = MakeShared<FJsonObject>();
+	E->SetStringField(TEXT("error"), Message);
+	E->SetStringField(TEXT("errorCode"), ErrorCode);
 	return JsonToString(E);
 }
 
@@ -870,10 +879,18 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("attachActor")));
 	Router->BindRoute(FHttpPath(TEXT("/api/begin-transaction")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("beginTransaction")));
+	Router->BindRoute(FHttpPath(TEXT("/api/bind-widget-event")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("bindWidgetEvent")));
 	Router->BindRoute(FHttpPath(TEXT("/api/clear-output-log")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("clearOutputLog")));
 	Router->BindRoute(FHttpPath(TEXT("/api/clear-selection")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("clearSelection")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-curve-table")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createCurveTable")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-data-asset")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createDataAsset")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-data-table")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createDataTable")));
 	Router->BindRoute(FHttpPath(TEXT("/api/create-widget-blueprint")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("createWidgetBlueprint")));
 	Router->BindRoute(FHttpPath(TEXT("/api/current-level")), EHttpServerRequestVerbs::VERB_GET,
@@ -902,6 +919,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("getCvar")));
 	Router->BindRoute(FHttpPath(TEXT("/api/get-dirty-packages")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("getDirtyPackages")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-frame-timing")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getFrameTiming")));
 	Router->BindRoute(FHttpPath(TEXT("/api/get-editor-selection")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("getEditorSelection")));
 	Router->BindRoute(FHttpPath(TEXT("/api/get-level-info")), EHttpServerRequestVerbs::VERB_POST,
@@ -946,6 +965,8 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 		QueuedHandler(TEXT("renameActor")));
 	Router->BindRoute(FHttpPath(TEXT("/api/save-all")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("saveAll")));
+	Router->BindRoute(FHttpPath(TEXT("/api/screenshot-graph")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("screenshotGraph")));
 	Router->BindRoute(FHttpPath(TEXT("/api/selected-actors")), EHttpServerRequestVerbs::VERB_GET,
 		QueuedHandler(TEXT("selectedActors")));
 	Router->BindRoute(FHttpPath(TEXT("/api/set-actor-mobility")), EHttpServerRequestVerbs::VERB_POST,
@@ -1219,6 +1240,10 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("setWidgetProperty"),
 		TEXT("moveWidget"),
 		TEXT("createWidgetBlueprint"),
+		TEXT("bindWidgetEvent"),
+		TEXT("createDataTable"),
+		TEXT("createCurveTable"),
+		TEXT("createDataAsset"),
 		// Level actor mutations
 		// CLAUDE-NOTE: these four were hyphenated on feature/describe-exposure-flags, but this set
 		// is matched against the DISPATCH KEY (see MutationEndpoints.Contains(Req->Endpoint)),
@@ -1254,6 +1279,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("setWidgetProperty"),
 		TEXT("moveWidget"),
 		TEXT("createWidgetBlueprint"),
+		TEXT("bindWidgetEvent"),
 	};
 
 	// GET handlers (use QueryParams, ignore Body)
@@ -1404,8 +1430,12 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("addWidget"), [this](const TMap<FString, FString>&, const FString& B) { return HandleAddWidget(B); });
 	HandlerMap.Add(TEXT("attachActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleAttachActor(B); });
 	HandlerMap.Add(TEXT("beginTransaction"), [this](const TMap<FString, FString>&, const FString& B) { return HandleBeginTransaction(B); });
+	HandlerMap.Add(TEXT("bindWidgetEvent"), [this](const TMap<FString, FString>&, const FString& B) { return HandleBindWidgetEvent(B); });
 	HandlerMap.Add(TEXT("clearOutputLog"), [this](const TMap<FString, FString>&, const FString& B) { return HandleClearOutputLog(B); });
 	HandlerMap.Add(TEXT("clearSelection"), [this](const TMap<FString, FString>&, const FString& B) { return HandleClearSelection(B); });
+	HandlerMap.Add(TEXT("createCurveTable"), [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateCurveTable(B); });
+	HandlerMap.Add(TEXT("createDataAsset"), [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateDataAsset(B); });
+	HandlerMap.Add(TEXT("createDataTable"), [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateDataTable(B); });
 	HandlerMap.Add(TEXT("createWidgetBlueprint"), [this](const TMap<FString, FString>&, const FString& B) { return HandleCreateWidgetBlueprint(B); });
 	HandlerMap.Add(TEXT("currentLevel"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetCurrentLevel(P, B); });
 	HandlerMap.Add(TEXT("deleteActor"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleDeleteActor(P, B); });
@@ -1420,6 +1450,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("getActorBounds"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetActorBounds(B); });
 	HandlerMap.Add(TEXT("getCvar"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetCVar(B); });
 	HandlerMap.Add(TEXT("getDirtyPackages"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetDirtyPackages(B); });
+	HandlerMap.Add(TEXT("getFrameTiming"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetFrameTiming(B); });
 	HandlerMap.Add(TEXT("getEditorSelection"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetEditorSelection(B); });
 	HandlerMap.Add(TEXT("getLevelInfo"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetLevelInfo(B); });
 	HandlerMap.Add(TEXT("getOutputLog"), [this](const TMap<FString, FString>&, const FString& B) { return HandleGetOutputLog(B); });
@@ -1442,6 +1473,7 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("removeWidget"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveWidget(B); });
 	HandlerMap.Add(TEXT("renameActor"), [this](const TMap<FString, FString>&, const FString& B) { return HandleRenameActor(B); });
 	HandlerMap.Add(TEXT("saveAll"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSaveAll(B); });
+	HandlerMap.Add(TEXT("screenshotGraph"), [this](const TMap<FString, FString>&, const FString& B) { return HandleScreenshotGraph(B); });
 	HandlerMap.Add(TEXT("selectedActors"), [this](const TMap<FString, FString>& P, const FString& B) { return HandleGetSelectedActors(P, B); });
 	HandlerMap.Add(TEXT("setActorMobility"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorMobility(B); });
 	HandlerMap.Add(TEXT("setActorPhysics"), [this](const TMap<FString, FString>&, const FString& B) { return HandleSetActorPhysics(B); });
@@ -1611,7 +1643,17 @@ bool FBlueprintMCPServer::SaveBlueprintPackage(UBlueprint* BP)
 		BP->Status = BS_UpToDate;
 	}
 
-	// 4. Clear read-only attribute if present (source control or LFS may set this)
+	// 4. Check out via source control if a provider is active for this project (github.com/mirno-ehf/ue5-mcp#88,
+	// #66 — MCP saves previously bypassed source control entirely, so edits never showed up in
+	// `p4 opened` and could be silently excluded at submit time). CheckOutFile no-ops safely when
+	// no provider is configured (VerifySourceControl() returns before touching the network), so
+	// this is unconditional and doesn't affect non-source-control projects.
+	if (USourceControlHelpers::IsEnabled())
+	{
+		USourceControlHelpers::CheckOutFile(PackageFilename, /*bSilent=*/true);
+	}
+	// Clear read-only attribute if present — kept as a fallback safety net (checkout succeeded but
+	// didn't clear the OS bit, provider is flaky, or LFS/read-only for another reason).
 	if (FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*PackageFilename))
 	{
 		UE_LOG(LogTemp, Display, TEXT("BlueprintMCP:   Clearing read-only attribute on %s"), *PackageFilename);
@@ -2406,6 +2448,14 @@ bool FBlueprintMCPServer::SaveGenericPackage(UObject* Asset)
 		Package->GetName(), FPackageName::GetAssetPackageExtension());
 	PackageFilename = FPaths::ConvertRelativePathToFull(PackageFilename);
 
+	// See the matching block in SaveBlueprintPackage for why this checks out via source control
+	// first (github.com/mirno-ehf/ue5-mcp#88, #66) — this is the shared save path used by
+	// materials, Niagara, Groom, Mirror Data Tables, and the new DataTable/CurveTable/DataAsset
+	// creation tools, so it's the highest-value of the two call sites to fix.
+	if (USourceControlHelpers::IsEnabled())
+	{
+		USourceControlHelpers::CheckOutFile(PackageFilename, /*bSilent=*/true);
+	}
 	if (FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*PackageFilename))
 	{
 		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*PackageFilename, false);

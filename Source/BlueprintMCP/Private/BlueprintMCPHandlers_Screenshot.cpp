@@ -2,6 +2,7 @@
 #include "Editor.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/Blueprint.h"
 #include "LevelEditorViewport.h"
 #include "UnrealClient.h"
 #include "HighResScreenshot.h"
@@ -12,6 +13,13 @@
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
+#include "GraphEditor.h"
+#include "SGraphPanel.h"
+#include "Widgets/SVirtualWindow.h"
+#include "Slate/WidgetRenderer.h"
+#include "Layout/WidgetPath.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "EdGraph/EdGraph.h"
 
 // ============================================================
 // HandleTakeScreenshot — capture a viewport screenshot
@@ -191,6 +199,166 @@ FString FBlueprintMCPServer::HandleTakeHighResScreenshot(const FString& Body)
 	Result->SetStringField(TEXT("note"), TEXT("High-res screenshot is captured asynchronously. The file may take a moment to appear on disk."));
 
 	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: High-res screenshot requested at %dx multiplier -> '%s'"), (int32)ResMultiplier, *FullPath);
+
+	return JsonToString(Result);
+}
+
+// ============================================================
+// HandleScreenshotGraph — render a Blueprint graph (not the 3D viewport) to PNG
+// ============================================================
+// CLAUDE-NOTE: github.com/mirno-ehf/ue5-mcp#65. Renders an SGraphEditor off-screen via
+// FWidgetRenderer/SVirtualWindow — the same headless-safe mechanism UE's own Content Browser
+// thumbnail renderers use (WidgetBlueprintThumbnailRenderer.cpp), not FWidgetSnapshotService
+// (which only captures already-visible native OS windows and can't target a widget built on the
+// fly). No live Blueprint Editor tab is required — AssetEditorToolkit is left unset. SEH-wrapped
+// since this is genuinely novel Slate/rendering code in this codebase with no prior art to lean on.
+
+namespace
+{
+	bool ScreenshotGraphInner(UEdGraph* EdGraph, int32 Width, int32 Height, TArray64<uint8>& OutPngData)
+	{
+		TSharedRef<SGraphEditor> GraphEditorWidget = SNew(SGraphEditor)
+			.GraphToEdit(EdGraph)
+			.IsEditable(false)
+			.DisplayAsReadOnly(true);
+
+		GraphEditorWidget->SlatePrepass(1.0f);
+		GraphEditorWidget->ZoomToFit(/*bOnlySelection=*/false);
+
+		FWidgetRenderer Renderer(/*bUseGammaCorrection=*/true);
+		UTextureRenderTarget2D* RenderTarget = Renderer.DrawWidget(GraphEditorWidget, FVector2D(Width, Height));
+		if (!RenderTarget)
+		{
+			return false;
+		}
+
+		FRenderTarget* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
+		if (!RTResource)
+		{
+			return false;
+		}
+
+		TArray<FColor> Bitmap;
+		if (!RTResource->ReadPixels(Bitmap) || Bitmap.Num() == 0)
+		{
+			return false;
+		}
+
+		FImageUtils::PNGCompressImageArray(Width, Height, Bitmap, OutPngData);
+		return OutPngData.Num() > 0;
+	}
+}
+
+int32 TryScreenshotGraphSEH(UEdGraph* EdGraph, int32 Width, int32 Height, TArray64<uint8>* OutPngData, bool* bOutSuccess)
+{
+	__try
+	{
+		*bOutSuccess = ScreenshotGraphInner(EdGraph, Width, Height, *OutPngData);
+		return 0;
+	}
+	__except (1)
+	{
+		*bOutSuccess = false;
+		return -1;
+	}
+}
+
+FString FBlueprintMCPServer::HandleScreenshotGraph(const FString& Body)
+{
+	TSharedPtr<FJsonObject> Json = ParseBodyJson(Body);
+	if (!Json.IsValid())
+	{
+		return MakeErrorJson(TEXT("Invalid JSON body."));
+	}
+
+	FString BlueprintName = Json->GetStringField(TEXT("blueprint"));
+	FString GraphName = Json->GetStringField(TEXT("graph"));
+	if (BlueprintName.IsEmpty() || GraphName.IsEmpty())
+	{
+		return MakeErrorJson(TEXT("Missing required fields: blueprint, graph"), MCPErrorCodes::InvalidInput);
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: screenshot_graph('%s', '%s')"), *BlueprintName, *GraphName);
+
+	if (!bIsEditor)
+	{
+		return MakeErrorJson(TEXT("screenshot_graph requires editor mode."));
+	}
+
+	FString LoadError;
+	UBlueprint* BP = LoadBlueprintByName(BlueprintName, LoadError);
+	if (!BP)
+	{
+		return MakeErrorJson(LoadError);
+	}
+
+	TArray<UEdGraph*> AllGraphs;
+	BP->GetAllGraphs(AllGraphs);
+	UEdGraph* TargetGraph = nullptr;
+	for (UEdGraph* Graph : AllGraphs)
+	{
+		if (Graph && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase))
+		{
+			TargetGraph = Graph;
+			break;
+		}
+	}
+	if (!TargetGraph)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Graph '%s' not found in Blueprint '%s'"), *GraphName, *BlueprintName), MCPErrorCodes::NotFound);
+	}
+
+	int32 Width = 1600;
+	int32 Height = 1200;
+	Json->TryGetNumberField(TEXT("width"), Width);
+	Json->TryGetNumberField(TEXT("height"), Height);
+	Width = FMath::Clamp(Width, 256, 8192);
+	Height = FMath::Clamp(Height, 256, 8192);
+
+	FString Filename;
+	if (!Json->TryGetStringField(TEXT("filename"), Filename) || Filename.IsEmpty())
+	{
+		Filename = FString::Printf(TEXT("Graph_%s_%s_%s"), *BlueprintName, *GraphName, *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+	}
+	if (!Filename.EndsWith(TEXT(".png")))
+	{
+		Filename += TEXT(".png");
+	}
+
+	FString OutputDir = FPaths::ProjectSavedDir() / TEXT("Screenshots");
+	FString FullPath = OutputDir / Filename;
+
+	TArray64<uint8> PngData;
+	bool bRenderSuccess = false;
+	int32 SEHCode = TryScreenshotGraphSEH(TargetGraph, Width, Height, &PngData, &bRenderSuccess);
+	if (SEHCode != 0)
+	{
+		return MakeErrorJson(TEXT("screenshot_graph crashed while rendering the graph (SEH exception caught)."), MCPErrorCodes::OperationFailed);
+	}
+	if (!bRenderSuccess)
+	{
+		return MakeErrorJson(TEXT("Failed to render the graph to an image."), MCPErrorCodes::OperationFailed);
+	}
+
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	PlatformFile.CreateDirectoryTree(*OutputDir);
+
+	bool bSaved = FFileHelper::SaveArrayToFile(PngData, *FullPath);
+	if (!bSaved)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Failed to save graph screenshot to '%s'."), *FullPath));
+	}
+
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("blueprint"), BlueprintName);
+	Result->SetStringField(TEXT("graph"), GraphName);
+	Result->SetStringField(TEXT("filename"), Filename);
+	Result->SetStringField(TEXT("fullPath"), FullPath);
+	Result->SetNumberField(TEXT("width"), Width);
+	Result->SetNumberField(TEXT("height"), Height);
+
+	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: Graph screenshot saved to '%s' (%dx%d)"), *FullPath, Width, Height);
 
 	return JsonToString(Result);
 }

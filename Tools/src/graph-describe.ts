@@ -32,21 +32,30 @@ export function describeNode(node: any): string {
   return node.title || cls;
 }
 
-/** Annotate a node description with data pin input connections (#10) */
+/** Annotate a node description with data pin input connections AND literal/default values (#10, #69) */
 export function annotateDataFlow(node: any, nodeMap: NodeMap): string {
   const dataInputs = (node.pins || []).filter(
-    (p: any) => p.type !== "exec" && p.direction === "Input" && p.connections?.length > 0
+    (p: any) => p.type !== "exec" && p.direction === "Input"
   );
   if (dataInputs.length === 0) return "";
 
   const parts: string[] = [];
   for (const pin of dataInputs) {
-    for (const conn of pin.connections) {
-      const sourceNode = nodeMap[conn.nodeId];
-      if (!sourceNode) continue;
-      const sourceName = sourceNode.variableName || sourceNode.functionName || sourceNode.title || sourceNode.class || "?";
-      const sourcePin = conn.pinName || "?";
-      parts.push(`${pin.name}=${sourceName}.${sourcePin}`);
+    if (pin.connections?.length > 0) {
+      for (const conn of pin.connections) {
+        const sourceNode = nodeMap[conn.nodeId];
+        if (!sourceNode) continue;
+        const sourceName = sourceNode.variableName || sourceNode.functionName || sourceNode.title || sourceNode.class || "?";
+        const sourcePin = conn.pinName || "?";
+        parts.push(`${pin.name}=${sourceName}.${sourcePin}`);
+      }
+    } else if (pin.defaultValue !== undefined && pin.defaultValue !== "" && pin.defaultValue !== "None") {
+      // CLAUDE-NOTE: a pin with no wire but a literal value (e.g. InTag="Breathing") is data
+      // flowing into the node just as much as a connection is — omitting it (github.com/mirno-ehf/ue5-mcp#69)
+      // made pseudocode for CALL nodes with mostly-constant arguments look like the arguments
+      // came from nowhere.
+      const isStringLike = pin.type === "string" || pin.type === "name" || pin.type === "text";
+      parts.push(`${pin.name}=${isStringLike ? `"${pin.defaultValue}"` : pin.defaultValue}`);
     }
   }
   if (parts.length === 0) return "";
@@ -151,6 +160,27 @@ export function walkExecChain(startNodeId: string, nodeMap: NodeMap, visited: Se
   }
 
   return lines;
+}
+
+/** Is this pin carrying zero information — no wire, and its value is the type's default? (#56) */
+function isEmptyPin(pin: any): boolean {
+  if (pin.connections?.length > 0) return false;
+  const v = pin.defaultValue;
+  return v === undefined || v === "" || v === "None" || v === "false" || v === "0" || v === "0.0";
+}
+
+/** Strip low-information fields from a graph response to cut size on large graphs (#56).
+ * Keeps everything other tools need to act on the result: node id, class/nodeType, title,
+ * function/variable/event names, and every pin's name/direction/type/connections. Drops node
+ * posX/posY and pins that are both unconnected and at their type's default value. */
+export function compactGraph(graphData: any): any {
+  const nodes: any[] = graphData.nodes || [];
+  const compactNodes = nodes.map((n: any) => {
+    const { posX, posY, pins, ...rest } = n;
+    const keptPins = (pins || []).filter((p: any) => !isEmptyPin(p));
+    return { ...rest, pins: keptPins };
+  });
+  return { ...graphData, nodes: compactNodes };
 }
 
 export function describeGraph(graphData: any): string {

@@ -245,4 +245,37 @@ export function registerWidgetTools(server: McpServer): void {
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );
+
+  // ---------------------------------------------------------------
+  // bind_widget_event
+  // ---------------------------------------------------------------
+  server.tool(
+    "bind_widget_event",
+    "Bind a named widget's event (e.g. a Button's OnClicked) to the graph, creating an event node an agent can wire logic to. The widget must have 'Is Variable' enabled (the default — check list_widget_tree). Only works on Widget Blueprints.",
+    {
+      blueprint: z.string().describe("Widget Blueprint name or package path (e.g. 'WBP_PlayerHud')"),
+      widgetName: z.string().describe("Name of the widget to bind, as shown in list_widget_tree (e.g. 'MyButton')"),
+      eventName: z.string().describe("Delegate/event name on the widget's class (e.g. 'OnClicked' for a Button, 'OnCheckStateChanged' for a CheckBox)"),
+    },
+    async ({ blueprint, widgetName, eventName }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const data = await uePost("/api/bind-widget-event", { blueprint, widgetName, eventName });
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines: string[] = [];
+      lines.push(data.alreadyExists ? `Event already bound (returning existing node).` : `Event bound successfully.`);
+      lines.push(`Node ID: ${data.nodeId}`);
+      lines.push(`Widget: ${data.widgetName}`);
+      lines.push(`Event: ${data.eventName}`);
+      if (data.saved !== undefined) lines.push(`Saved: ${data.saved}`);
+
+      lines.push(``);
+      lines.push(`Next steps:`);
+      lines.push(`  add_node / connect_pins on node "${data.nodeId}" — wire logic to the "${data.eventName}" pin`);
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
 }

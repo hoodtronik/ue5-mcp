@@ -42,6 +42,8 @@ import { registerGroomTools } from "./tools/groom.js";
 import { registerMirrorTableTools } from "./tools/mirror-table.js";
 import { registerPcgTools } from "./tools/pcg.js";
 import { registerPcgAuthoringTools } from "./tools/pcg-authoring.js";
+import { registerDataAssetTools } from "./tools/data-assets.js";
+import { registerProfilingTools } from "./tools/profiling.js";
 
 // CLAUDE-NOTE: single source of truth for "every tool-registration function + a human-friendly
 // category label", consumed by index.ts (real registration), batch-schema-invariant.test.ts
@@ -97,4 +99,6 @@ export const TOOL_REGISTRATIONS: ToolRegistration[] = [
   { register: registerMirrorTableTools, category: "Mirror Data Tables" },
   { register: registerPcgTools, category: "PCG" },
   { register: registerPcgAuthoringTools, category: "PCG Authoring" },
+  { register: registerDataAssetTools, category: "Asset Creation" },
+  { register: registerProfilingTools, category: "Profiling" },
 ];

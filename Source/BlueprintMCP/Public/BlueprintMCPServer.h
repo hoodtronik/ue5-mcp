@@ -19,6 +19,19 @@ class UWorld;
 class ULevel;
 class AActor;
 
+// CLAUDE-NOTE: small, stable set of machine-checkable error codes for the TS layer to branch on —
+// the scoped-down "TResult<T> + centralized error codes" item (see FBlueprintMCPServer::MakeErrorJson's
+// overload for the scoping rationale: new handlers only, ~150 existing ones untouched). Plain
+// `inline const TCHAR*` (not a UENUM) so they serialize directly with no ToString() ceremony and
+// a new code doesn't require touching a central enum declaration.
+namespace MCPErrorCodes
+{
+	inline const TCHAR* NotFound = TEXT("not_found");
+	inline const TCHAR* AlreadyExists = TEXT("already_exists");
+	inline const TCHAR* InvalidInput = TEXT("invalid_input");
+	inline const TCHAR* OperationFailed = TEXT("operation_failed");
+}
+
 // ----- Snapshot data structures -----
 
 struct FPinConnectionRecord
@@ -191,6 +204,14 @@ private:
 	FString HandleCreateEnum(const FString& Body);
 	FString HandleAddStructProperty(const FString& Body);
 	FString HandleRemoveStructProperty(const FString& Body);
+
+	// ----- Asset creation beyond Blueprints (#26) -----
+	FString HandleCreateDataTable(const FString& Body);
+	FString HandleCreateCurveTable(const FString& Body);
+	FString HandleCreateDataAsset(const FString& Body);
+
+	// ----- Profiling (minimal frame-timing snapshot) -----
+	FString HandleGetFrameTiming(const FString& Body);
 
 	// ----- Graph manipulation -----
 	FString HandleDeleteGraph(const FString& Body);
@@ -396,6 +417,7 @@ private:
 	FString HandleSetGameView(const FString& Body);
 	FString HandleTakeScreenshot(const FString& Body);
 	FString HandleTakeHighResScreenshot(const FString& Body);
+	FString HandleScreenshotGraph(const FString& Body);
 
 	// ----- Output log / undo-redo / editor utils -----
 	FString HandleGetOutputLog(const FString& Body);
@@ -418,6 +440,7 @@ private:
 	FString HandleSetWidgetProperty(const FString& Body);
 	FString HandleMoveWidget(const FString& Body);
 	FString HandleCreateWidgetBlueprint(const FString& Body);
+	FString HandleBindWidgetEvent(const FString& Body);
 
 	// ----- Console variables -----
 	FString HandleGetCVar(const FString& Body);
@@ -451,6 +474,14 @@ private:
 	UEdGraphNode* FindNodeByGuid(UBlueprint* BP, const FString& GuidString, UEdGraph** OutGraph = nullptr);
 	TSharedPtr<FJsonObject> ParseBodyJson(const FString& Body);
 	FString MakeErrorJson(const FString& Message);
+	// CLAUDE-NOTE: scoped-down version of "TResult<T> + centralized error codes" — establishes a
+	// machine-stable "errorCode" field (see MCPErrorCodes namespace below) for the TS layer to
+	// branch on instead of string-matching free-text error messages, WITHOUT retrofitting the
+	// ~150 existing handlers (too large/invasive to do unscoped — see memory). Used only by
+	// handlers added in this pass: CreateDataTable/CreateCurveTable/CreateDataAsset,
+	// ScreenshotGraph, BindWidgetEvent, and the CallDispatcher/cross-BP-VariableGet additions to
+	// HandleAddNode. Existing handlers are untouched and keep returning bare "error" strings.
+	FString MakeErrorJson(const FString& Message, const FString& ErrorCode);
 	bool SaveBlueprintPackage(UBlueprint* BP);
 	static FString UrlDecode(const FString& EncodedString);
 

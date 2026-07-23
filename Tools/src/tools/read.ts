@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ensureUE, ueGet, uePost } from "../ue-bridge.js";
 import { summarizeBlueprint } from "../graph-describe.js";
-import { describeGraph } from "../graph-describe.js";
+import { describeGraph, compactGraph } from "../graph-describe.js";
 
 export function registerReadTools(server: McpServer): void {
   server.tool(
@@ -55,12 +55,15 @@ export function registerReadTools(server: McpServer): void {
 
   server.tool(
     "get_blueprint_graph",
-    "Get a specific named graph from a Blueprint (e.g. 'EventGraph', a function name). Graph names are URL-encoded automatically.",
+    "Get a specific named graph from a Blueprint (e.g. 'EventGraph', a function name). Graph names are URL-encoded automatically. Pass compact=true for large graphs to cut response size (drops node positions and pins that carry no information — unconnected pins at their type's default value) while keeping everything other tools need to act on the result (node IDs, pin names, connections). For a human-readable summary instead of raw JSON, use describe_graph.",
     {
       name: z.string().describe("Blueprint name or package path"),
       graph: z.string().describe("Graph name (e.g. 'EventGraph')"),
+      compact: z.boolean().optional().describe(
+        "If true, strip low-information fields (node posX/posY, and pins that are both unconnected and at their default value) to reduce response size on large graphs. Node IDs, pin names, and all connections are always preserved."
+      ),
     },
-    async ({ name, graph }) => {
+    async ({ name, graph, compact }) => {
       const err = await ensureUE();
       if (err) return { content: [{ type: "text" as const, text: err }] };
 
@@ -72,7 +75,7 @@ export function registerReadTools(server: McpServer): void {
         return { content: [{ type: "text" as const, text: msg }] };
       }
 
-      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(compact ? compactGraph(data) : data) }] };
     }
   );
 

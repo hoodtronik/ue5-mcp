@@ -69,4 +69,39 @@ export function registerScreenshotTools(server: McpServer): void {
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );
+
+  server.tool(
+    "screenshot_graph",
+    "Capture a Blueprint GRAPH (not the 3D viewport) as a PNG — the node layout as it would appear in the Blueprint editor, zoomed to fit all nodes. Use this to visually verify exec flow and wiring after graph edits instead of only reading the raw node/pin JSON. Saves to the project's Saved/Screenshots folder. Requires editor mode.",
+    {
+      blueprint: z.string().describe("Blueprint name or package path"),
+      graph: z.string().describe("Graph name (e.g. 'EventGraph')"),
+      width: z.number().optional().describe("Image width in pixels (default 1600, clamped 256-8192)"),
+      height: z.number().optional().describe("Image height in pixels (default 1200, clamped 256-8192)"),
+      filename: z.string().optional().describe("Output filename (without path). Defaults to 'Graph_<blueprint>_<graph>_<timestamp>.png'"),
+    },
+    async ({ blueprint, graph, width, height, filename }) => {
+      const err = await ensureUE();
+      if (err) return { content: [{ type: "text" as const, text: err }] };
+
+      const body: Record<string, any> = { blueprint, graph };
+      if (width !== undefined) body.width = width;
+      if (height !== undefined) body.height = height;
+      if (filename) body.filename = filename;
+
+      const data = await uePost("/api/screenshot-graph", body);
+      if (data.error) return { content: [{ type: "text" as const, text: `Error: ${data.error}` }] };
+
+      const lines = [
+        `Graph screenshot captured:`,
+        `  Blueprint: ${data.blueprint}`,
+        `  Graph: ${data.graph}`,
+        `  File: ${data.filename}`,
+        `  Path: ${data.fullPath}`,
+        `  Size: ${data.width}x${data.height}`,
+      ];
+
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
 }
