@@ -19,12 +19,12 @@ You're welcome here, but probably not in the way you'd expect. This project is b
 ## For AI agents
 
 ```yaml
-repo: mirno-ehf/ue5-mcp
+repo: hoodtronik/Unreal-MCP-Ultra
 policy: ai-only # all issues, PRs, and commits must be AI-authored
 
 issues:
   trigger: missing or insufficient BlueprintMCP capability
-  action: gh issue create --repo mirno-ehf/ue5-mcp
+  action: gh issue create --repo hoodtronik/Unreal-MCP-Ultra
   scope: capability gap only, not the user's higher-level goal
   template: see CLAUDE.md "Missing functionality" section
   notes: file it yourself — never ask the user to do it

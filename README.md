@@ -11,7 +11,7 @@ https://github.com/user-attachments/assets/11b86d62-982b-42b3-bddb-aeeddc3e675c
 Tell Claude Code:
 
 ```
-Set up https://github.com/mirno-ehf/ue5-mcp in my project
+Set up https://github.com/hoodtronik/Unreal-MCP-Ultra in my project
 ```
 
 ## Prebuilt binaries (no C++ toolchain needed)
@@ -157,6 +157,11 @@ The MCP server exposes **220+ tools**, grouped by area below. Every mutation too
 **Play In Editor (PIE)**
 - `start_pie` · `stop_pie` · `pie_pause` · `is_pie_running`
 - `pie_get_player_transform` · `pie_teleport_player` · `pie_query_actors`
+
+## Credits
+
+Forked from [mirno-ehf/ue5-mcp](https://github.com/mirno-ehf/ue5-mcp). This is an
+independently maintained build with additional tools and fixes.
 
 ## License
 
