@@ -41,7 +41,7 @@ Driven via the `exec_command` tool. The Voxel Sandbox → StaticMesh baker adds:
 
 ## Tools
 
-The MCP server exposes **228 tools**, grouped by area below. Every mutation tool supports a
+The MCP server exposes **220+ tools**, grouped by area below. Every mutation tool supports a
 `dryRun` parameter where applicable and returns human-readable summaries with `nextSteps` hints.
 
 **Scripting / Python**
@@ -57,7 +57,7 @@ The MCP server exposes **228 tools**, grouped by area below. Every mutation tool
 - `list_examples` — list runnable end-to-end example recipes (e.g. create a blueprint component,
   spawn a static mesh, build a PCG scatter graph).
 - Opt-in catalog mode (`MCP_DISCOVERY_MODE=true`) adds `list_tool_categories` · `describe_category`
-  · `search_tools` for browsing the tool set instead of registering all 228 up front.
+  · `search_tools` for browsing the tool set instead of registering them all up front.
 
 **Blueprints — read**
 - `list_blueprints` · `get_blueprint` · `get_blueprint_summary` · `get_blueprint_graph` · `describe_graph`
