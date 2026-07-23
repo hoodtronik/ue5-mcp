@@ -107,6 +107,13 @@ private:
 	using FRequestHandler = TFunction<FString(const TMap<FString, FString>&, const FString&)>;
 	TMap<FString, FRequestHandler> HandlerMap;
 	TSet<FString> MutationEndpoints;
+	// CLAUDE-NOTE: widget mutations are deliberately EXCLUDED from undo transactions.
+	// Recompiling a Widget Blueprint creates REINST_ objects whose WidgetTree references sit in
+	// the transaction buffer and keep the old World alive, producing a fatal "World Leak" crash
+	// in ReferenceChainSearch.cpp. Widget tools use snapshot/restore instead. This declaration and
+	// its read site in ProcessOneRequest were both dropped by the auto-merge of
+	// feature/describe-exposure-flags while the assignment survived — restored here.
+	TSet<FString> WidgetMutationEndpoints;
 	void RegisterHandlers();
 	// ----- Queued request model -----
 	struct FPendingRequest
@@ -295,6 +302,30 @@ private:
 	FString HandleListGroomBindings(const TMap<FString, FString>& Params);
 	FString HandleDuplicateGroomBinding(const FString& Body);
 	FString HandleSetGroomBindingTargetMesh(const FString& Body);
+
+	// ----- Niagara handlers (Tier 1: asset creation + introspection) -----
+	FString HandleCreateNiagaraSystem(const FString& Body);
+	FString HandleCreateNiagaraEmitter(const FString& Body);
+	FString HandleAddEmitterToSystem(const FString& Body);
+	FString HandleListNiagaraSystems(const TMap<FString, FString>& Params);
+	FString HandleGetNiagaraSystemSummary(const FString& Body);
+	FString HandleGetNiagaraEmitterSummary(const FString& Body);
+
+	// ----- Niagara handlers (Tier 2: stack authoring) -----
+	FString HandleAddNiagaraModule(const FString& Body);
+	FString HandleAddNiagaraRenderer(const FString& Body);
+	FString HandleSetModuleInput(const FString& Body);
+	FString HandleSetSystemModuleInput(const FString& Body);
+	FString HandleAddUserParameter(const FString& Body);
+	FString HandleSetUserParameterDefault(const FString& Body);
+	FString HandleListModuleLibrary(const TMap<FString, FString>& Params);
+	FString HandleSetEmitterSimTarget(const FString& Body);
+	FString HandleRemoveNiagaraRenderer(const FString& Body);
+	FString HandleRemoveUserParameter(const FString& Body);
+	FString HandleRemoveEmitterFromSystem(const FString& Body);
+	FString HandleListEmitterModules(const FString& Body);
+	FString HandleListModuleInputs(const FString& Body);
+	FString HandleSetRendererProperty(const FString& Body);
 
 	// ----- Animation Blueprint handlers -----
 	FString HandleCreateAnimBlueprint(const FString& Body);
