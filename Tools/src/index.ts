@@ -39,6 +39,7 @@ import { registerWidgetTools } from "./tools/widgets.js";
 import { registerLevelTools } from "./tools/level.js";
 import { registerNiagaraTools } from "./tools/niagara.js";
 import { registerRunPythonTools } from "./tools/run-python.js";
+import { registerDiscoverPythonTools } from "./tools/discover-python.js";
 // CLAUDE-NOTE: merged back — Groom is this repo's own toolset (has C++ backing); the global server
 // sync didn't include it. Keep it alongside Niagara so no tools are lost.
 import { registerGroomTools } from "./tools/groom.js";
@@ -91,6 +92,7 @@ registerWidgetTools(server);
 registerLevelTools(server);
 registerNiagaraTools(server);
 registerRunPythonTools(server);
+registerDiscoverPythonTools(server);
 registerGroomTools(server);
 registerMirrorTableTools(server);
 registerPcgTools(server);
